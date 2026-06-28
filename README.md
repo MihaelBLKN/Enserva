@@ -1,29 +1,99 @@
-# Enserva - Learning project and solution for my own projects
+# Enserva
 
-This is an game server, shortened. It works depending on how you feel. Still work in progress but oh well! It supports both WebSocket, UDP WebSocket and pure UDP connections. So, both browser and outside of browser! Summarized for idiots.
+Enserva is a small Go networking API for tick-based multiplayer/server simulations.
 
-Remember, still work in progress so a lot of features for making it easier for developers to use and configure are still missing.
+The server core does not know about players, buildings, anti-cheat, movement, collisions, or world rules. External stuff defines their own network objects and register them with the server.
 
-## FLAGS
+## Core Idea
 
-- -networkProtocol (ws, udp)
-- -playerDimension (2d, 3d)
-- -gameWorldX
-- -gameWorldY
-- -gameWorldZ
-- -httpPort (this is where the debug web page runs)
-- -udpPort (this is where the actual udp server runs)
+Create a normal Go package in your app, for example `netObjects`, and define objects like `player.go`, `building.go`, `projectile.go`, or anything else your game needs.
 
-## FEATURES
+Each object can implement:
 
-- Reconciliation
-- Interpolation
-- Server-side authority
-- World bounds enforcement
-- Obstacle enforcement
-- UDP connection
-- WebSocket connection
+- `ObjectType() string`
+- `ObjectID() string`
+- `Snapshot() any`
+- `OnTick(network.TickContext)`
+- `OnFullTick(network.TickContext)`
+- `OnRequest(network.RequestContext) error`
 
-## EXAMPLE
+`OnTick` runs every simulation tick.
+`OnFullTick` runs once per completed second of ticks. With the default `128` tick rate, it runs after every `128` ticks.
+`OnRequest` runs when a UDP/WebSocket request targets that object.
 
-go run . -networkProtocol udp -playerDimension 3d
+## Example Object Registration
+
+```go
+server := network.NewServer(network.Config{
+	Protocol:     network.ProtocolUDP,
+	HTTPAddress:  ":8080",
+	UDPAddress:   ":9000",
+	TickRate:     128,
+	SnapshotRate: 20,
+})
+
+server.RegisterFactory("player", network.ObjectFactoryFunc(netobjects.PlayerFactory))
+server.RegisterFactory("building", network.ObjectFactoryFunc(netobjects.BuildingFactory))
+
+log.Fatal(server.ListenAndServe())
+```
+
+The included `netObjects` package is only an example of how you can define your objects.
+
+## Request Format
+
+Send JSON through WebSocket or UDP:
+
+```json
+{
+  "seq": 1,
+  "objectType": "player",
+  "objectId": "player-1",
+  "action": "move",
+  "data": {
+    "x": 1,
+    "y": 0
+  }
+}
+```
+
+If a factory is registered for `objectType`, the server can create missing object IDs automatically before calling `OnRequest`.
+
+## Snapshot Format
+
+Clients receive snapshots like:
+
+```json
+{
+  "type": "snapshot",
+  "clientId": "udp-127.0.0.1:50000",
+  "tick": 128,
+  "lastSeq": 1,
+  "objects": {
+    "player": {
+      "player-1": {
+        "id": "player-1",
+        "x": 180,
+        "y": 0
+      }
+    }
+  }
+}
+```
+
+## Run The Example Host
+
+```bash
+go run . -networkProtocol udp
+```
+
+Useful flags:
+
+- `-networkProtocol` (`ws` or `udp`)
+- `-httpPort`
+- `-udpPort`
+- `-tickRate`
+- `-snapshotRate`
+- `-clientTimeout`
+- `-staticDir`
+- `-exampleObjects`

@@ -1,7 +1,6 @@
 package network
 
 import (
-	"Enserva/objects"
 	"encoding/json"
 	"errors"
 	"log"
@@ -15,79 +14,25 @@ import (
 )
 
 type UDPServer struct {
-	address       string
-	tickInterval  time.Duration
-	snapshotEvery uint64
-	clients       map[string]*UDPClient
-	world         WorldConfig
-	playerRules   objects.PlayerRules
-	tick          uint64
-	mu            sync.Mutex
+	address string
+	clients map[string]*UDPClient
+	runtime *Runtime
+	mu      sync.Mutex
 }
 
 type UDPClient struct {
 	addr        *net.UDPAddr
-	player      *objects.Player
-	input       InputMessage
+	id          string
 	lastSeq     uint64
 	lastHeardAt time.Time
 }
 
-func CreateUDPServer(world WorldConfig) *UDPServer {
-	return CreateUDPServerWithAddress(world, ":9000")
-}
-
-func CreateUDPServerWithAddress(world WorldConfig, address string) *UDPServer {
-	playerRules := objects.DefaultPlayerRules(world)
-	if strings.TrimSpace(address) == "" {
-		address = ":9000"
-	}
-
+func NewUDPServer(runtime *Runtime) *UDPServer {
 	return &UDPServer{
-		address:       address,
-		tickInterval:  time.Second / simulationTickRate,
-		snapshotEvery: simulationTickRate / snapshotRate,
-		clients:       map[string]*UDPClient{},
-		world:         playerRules.World,
-		playerRules:   playerRules,
+		address: runtime.Config().UDPAddress,
+		clients: map[string]*UDPClient{},
+		runtime: runtime,
 	}
-}
-
-func ServeUDPDebugClient(world WorldConfig) error {
-	return ServeUDPDebugClientWithAddresses(world, ":8080", ":9000")
-}
-
-func ServeUDPDebugClientWithAddresses(world WorldConfig, httpAddress, udpAddress string) error {
-	udpServer := CreateUDPServerWithAddress(world, udpAddress)
-
-	go func() {
-		if err := udpServer.ListenAndServe(); err != nil {
-			log.Fatal(err)
-		}
-	}()
-
-	http.HandleFunc("/ws", handleUDPBridge(udpServer.address))
-	http.HandleFunc("/udp-bridge", handleUDPBridge(udpServer.address))
-	http.Handle("/", serveDebugFiles(udpDebugDirectory(udpServer.world)))
-
-	log.Printf("Enserva UDP server running on %s", udpServer.address)
-	log.Printf("Enserva debug client running on %s", httpAddress)
-	if udpServer.world.Dimension.Is3D() {
-		log.Printf("Game world: %.0fx%.0fx%.0f (%s)", udpServer.world.X, udpServer.world.Y, udpServer.world.Z, udpServer.world.Dimension)
-	} else {
-		log.Printf("Game world: %.0fx%.0f (%s)", udpServer.world.X, udpServer.world.Y, udpServer.world.Dimension)
-	}
-	log.Printf("Debug client: http://localhost%s/", httpAddress)
-
-	return http.ListenAndServe(httpAddress, nil)
-}
-
-func udpDebugDirectory(world WorldConfig) string {
-	if world.Dimension.Is3D() {
-		return "debug-frontend-udp-threeD/dist"
-	}
-
-	return "debug-frontend-udp"
 }
 
 func (server *UDPServer) ListenAndServe() error {
@@ -104,8 +49,7 @@ func (server *UDPServer) ListenAndServe() error {
 
 	go server.runTickLoop(conn)
 
-	buffer := make([]byte, 4096)
-
+	buffer := make([]byte, 65535)
 	for {
 		bytesRead, clientAddr, err := conn.ReadFromUDP(buffer)
 		if err != nil {
@@ -114,34 +58,49 @@ func (server *UDPServer) ListenAndServe() error {
 		}
 
 		if err := server.handleMessage(clientAddr, buffer[:bytesRead]); err != nil {
-			log.Println("udp message error:", err)
+			log.Println("udp request error:", err)
 		}
 	}
 }
 
 func (server *UDPServer) handleMessage(addr *net.UDPAddr, message []byte) error {
-	var input InputMessage
-	if err := json.Unmarshal(message, &input); err != nil {
+	var request RequestMessage
+	if err := json.Unmarshal(message, &request); err != nil {
 		return err
 	}
 
-	server.mu.Lock()
-	defer server.mu.Unlock()
-
-	client := server.getOrCreateClient(addr)
-	client.lastHeardAt = time.Now()
-
-	if input.Sequence <= client.lastSeq {
+	client, accepted := server.acceptClientRequest(addr, request.Sequence)
+	if !accepted {
 		return nil
 	}
 
-	client.input = input
-	client.lastSeq = input.Sequence
-
-	return nil
+	return server.runtime.HandleRequest(RequestContext{
+		Transport:  "udp",
+		ClientID:   client.id,
+		ReceivedAt: time.Now(),
+		Request:    request,
+	})
 }
 
-func (server *UDPServer) getOrCreateClient(addr *net.UDPAddr) *UDPClient {
+func (server *UDPServer) acceptClientRequest(addr *net.UDPAddr, sequence uint64) (*UDPClient, bool) {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+
+	client := server.getOrCreateClientLocked(addr)
+	client.lastHeardAt = time.Now()
+
+	if sequence == 0 {
+		return client, true
+	}
+	if sequence <= client.lastSeq {
+		return client, false
+	}
+
+	client.lastSeq = sequence
+	return client, true
+}
+
+func (server *UDPServer) getOrCreateClientLocked(addr *net.UDPAddr) *UDPClient {
 	key := addr.String()
 	client, ok := server.clients[key]
 	if ok {
@@ -150,7 +109,7 @@ func (server *UDPServer) getOrCreateClient(addr *net.UDPAddr) *UDPClient {
 
 	client = &UDPClient{
 		addr:        addr,
-		player:      objects.SpawnPlayer("udp-"+key, server.world, len(server.clients)),
+		id:          "udp-" + key,
 		lastHeardAt: time.Now(),
 	}
 	server.clients[key] = client
@@ -159,19 +118,26 @@ func (server *UDPServer) getOrCreateClient(addr *net.UDPAddr) *UDPClient {
 }
 
 func (server *UDPServer) runTickLoop(conn *net.UDPConn) {
-	ticker := time.NewTicker(server.tickInterval)
+	ticker := time.NewTicker(server.runtime.Config().TickInterval())
 	defer ticker.Stop()
 
 	for range ticker.C {
 		if err := server.advanceAndMaybeBroadcast(conn); err != nil {
-			log.Println("udp tick broadcast error:", err)
+			log.Println("udp snapshot error:", err)
 		}
 	}
 }
 
 func (server *UDPServer) advanceAndMaybeBroadcast(conn *net.UDPConn) error {
-	snapshots, err := server.advanceAndSnapshot()
-	if err != nil || len(snapshots) == 0 {
+	tick := server.runtime.Advance()
+	server.removeStaleClients(time.Now())
+
+	if tick%server.runtime.Config().SnapshotEvery() != 0 {
+		return nil
+	}
+
+	snapshots, err := server.snapshots()
+	if err != nil {
 		return err
 	}
 
@@ -189,36 +155,19 @@ type udpSnapshot struct {
 	payload []byte
 }
 
-func (server *UDPServer) advanceAndSnapshot() ([]udpSnapshot, error) {
-	server.mu.Lock()
-	defer server.mu.Unlock()
+func (server *UDPServer) snapshots() ([]udpSnapshot, error) {
+	objects := server.runtime.Snapshot()
+	tick := server.runtime.Tick()
+	clients := server.snapshotClients()
 
-	server.tick++
-	server.removeStaleClients(time.Now())
-
-	for _, client := range server.clients {
-		client.player.ApplyInput(client.input.Movement(), server.tickInterval.Seconds(), server.playerRules, server.otherPlayers(client))
-	}
-
-	if server.tick%server.snapshotEvery != 0 {
-		return nil, nil
-	}
-
-	players := map[string]objects.Player{}
-
-	for _, client := range server.clients {
-		players[client.player.ID] = client.player.Clone()
-	}
-
-	snapshots := make([]udpSnapshot, 0, len(server.clients))
-	for _, client := range server.clients {
+	snapshots := make([]udpSnapshot, 0, len(clients))
+	for _, client := range clients {
 		payload, err := json.Marshal(SnapshotMessage{
 			Type:         "snapshot",
-			SelfID:       client.player.ID,
-			Tick:         server.tick,
+			ClientID:     client.id,
+			Tick:         tick,
 			LastSequence: client.lastSeq,
-			World:        server.world,
-			Players:      players,
+			Objects:      objects,
 		})
 		if err != nil {
 			return nil, err
@@ -234,8 +183,10 @@ func (server *UDPServer) advanceAndSnapshot() ([]udpSnapshot, error) {
 }
 
 func (server *UDPServer) removeStaleClients(now time.Time) {
-	timeout := time.Duration(clientTimeout) * time.Second
+	server.mu.Lock()
+	defer server.mu.Unlock()
 
+	timeout := server.runtime.Config().ClientTimeout
 	for key, client := range server.clients {
 		if now.Sub(client.lastHeardAt) > timeout {
 			delete(server.clients, key)
@@ -243,18 +194,16 @@ func (server *UDPServer) removeStaleClients(now time.Time) {
 	}
 }
 
-func (server *UDPServer) otherPlayers(client *UDPClient) []*objects.Player {
-	others := make([]*objects.Player, 0, len(server.clients)-1)
+func (server *UDPServer) snapshotClients() []UDPClient {
+	server.mu.Lock()
+	defer server.mu.Unlock()
 
-	for _, other := range server.clients {
-		if other == client {
-			continue
-		}
-
-		others = append(others, other.player)
+	clients := make([]UDPClient, 0, len(server.clients))
+	for _, client := range server.clients {
+		clients = append(clients, *client)
 	}
 
-	return others
+	return clients
 }
 
 var udpBridgeUpgrader = websocket.Upgrader{
@@ -321,7 +270,7 @@ func loopbackUDPAddress(address string) string {
 }
 
 func forwardUDPToWebSocket(done <-chan struct{}, udpConn *net.UDPConn, wsConn *websocket.Conn) {
-	buffer := make([]byte, 4096)
+	buffer := make([]byte, 65535)
 
 	for {
 		select {
