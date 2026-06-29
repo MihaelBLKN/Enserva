@@ -11,6 +11,7 @@ Enserva is still an early project. Treat the documented APIs as a guide to the p
 - Tick loop with per-tick and full-second hooks.
 - UDP request routing to existing objects.
 - Snapshot broadcasting with per-object visibility controls.
+- Per-client interest management for snapshot filtering.
 - Optional object-based authentication flow.
 - Server-side object factories for controlled creation.
 - Example `player`, `building`, and authenticator objects.
@@ -55,6 +56,7 @@ func main() {
 | --------------------------------- | ----------------------------------------------------------------- |
 | [Installation](installation.md)   | Toolchain, clone, build, test, and local docs setup.              |
 | [Quick Start](quick-start.md)     | Start the included host and send a first UDP message.             |
+| [Features](features/interest-management.md) | Feature guides, including interest management.                    |
 | [Configuration](configuration.md) | Runtime config, CLI flags, UDP messages, and supported options.   |
 | [Architecture](architecture.md)   | Runtime layout, request flow, snapshots, and concurrency model.   |
 | [Developer API](developer-api.md) | Public package overview and links to detailed package references. |

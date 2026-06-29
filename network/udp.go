@@ -259,12 +259,12 @@ type udpSnapshot struct {
 }
 
 func (server *UDPServer) snapshots() ([]udpSnapshot, error) {
-	objects := server.runtime.Snapshot()
 	tick := server.runtime.Tick()
 	clients := server.snapshotClients()
 
 	snapshots := make([]udpSnapshot, 0, len(clients))
 	for _, client := range clients {
+		objects := server.runtime.SnapshotForClient(client.id)
 		payload, err := json.Marshal(SnapshotMessage{
 			Type:         "snapshot",
 			ClientID:     client.id,

@@ -33,6 +33,7 @@ Objects can implement any of these methods. Enserva detects them through interfa
 
 | Method                                                                   | Interface                       | When it runs                                                                                             |
 | ------------------------------------------------------------------------ | ------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `OnInit(network.InitContext)`                                            | `network.InitHandler`           | Immediately after an object is registered with the runtime.                                              |
 | `OnTick(network.TickContext)`                                            | `network.TickHandler`           | Every simulation tick after the runtime increments `Tick`.                                               |
 | `OnFullTick(network.TickContext)`                                        | `network.FullTickHandler`       | Once per completed second of ticks, using `tick % TickRate == 0`.                                        |
 | `OnRequest(network.RequestContext) error`                                | `network.RequestHandler`        | When a request targets an existing object with matching `objectType` and `objectId`.                     |
@@ -130,6 +131,18 @@ if err := server.RegisterObject(door); err != nil {
 }
 ```
 
+## Init Hook Example
+
+Use `OnInit` for setup that needs the runtime after an object is registered. Interest management is a common example:
+
+```go
+func (player *Player) OnInit(ctx network.InitContext) {
+	ctx.Runtime().Features().EnableInterestManagement(
+		network.PlayerInterest2D(player, "x", "y", 500),
+	)
+}
+```
+
 ## Tick Hook Example
 
 ```go
@@ -147,6 +160,7 @@ func (projectile *Projectile) OnTick(ctx network.TickContext) {
 | `Delta`        | Tick duration as `time.Duration`.   |
 | `DeltaSeconds` | Tick duration as `float64` seconds. |
 | `Runtime`      | Runtime invoking the hook.          |
+| `Features`     | Runtime feature registry.           |
 
 ## Request Hook Basics
 
@@ -176,6 +190,7 @@ Useful fields and methods:
 | `ctx.Decode(&target)`    | Decode `ctx.Request.Data` JSON.                        |
 | `ctx.Respond(message)`   | Send a direct response when the transport supports it. |
 | `ctx.Runtime`            | Access the runtime routing the request.                |
+| `ctx.Features`           | Access runtime feature configuration.                  |
 
 ## Authentication Object Basics
 
@@ -228,7 +243,7 @@ The repository's `Enserva/netObjects` package includes:
 | Example                                  | Demonstrates                                                       |
 | ---------------------------------------- | ------------------------------------------------------------------ |
 | `Player`                                 | An object with request, tick, and full-tick hooks.                 |
-| `Building`                               | An object with request and full-tick hooks.                        |
+| `Building`                               | An object with init, request, and full-tick hooks.                 |
 | `PlayerAuthenticator`                    | A hidden authentication object that creates a server-owned player. |
 | `Register(server *network.Server) error` | One way to group object/factory registration for an app package.   |
 

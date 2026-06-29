@@ -72,6 +72,10 @@ type Object interface {
 	Snapshot() any
 }
 
+type InitHandler interface {
+	OnInit(InitContext)
+}
+
 type TickHandler interface {
 	OnTick(TickContext)
 }
@@ -151,11 +155,35 @@ type AuthenticationResponse struct {
 	AuthenticatedID string `json:"authenticatedId"`
 }
 
+type InitContext struct {
+	object     Object
+	objectType string
+	objectID   string
+	runtime    *Runtime
+}
+
+func (ctx InitContext) Object() Object {
+	return ctx.object
+}
+
+func (ctx InitContext) ObjectType() string {
+	return ctx.objectType
+}
+
+func (ctx InitContext) ObjectID() string {
+	return ctx.objectID
+}
+
+func (ctx InitContext) Runtime() *Runtime {
+	return ctx.runtime
+}
+
 type TickContext struct {
 	Tick         uint64
 	Delta        time.Duration
 	DeltaSeconds float64
 	Runtime      *Runtime
+	Features     *Features
 }
 
 type RequestContext struct {
@@ -165,6 +193,7 @@ type RequestContext struct {
 	ReceivedAt time.Time
 	Request    RequestMessage
 	Runtime    *Runtime
+	Features   *Features
 	Response   ResponseWriter
 }
 
@@ -192,6 +221,7 @@ type AuthenticationContext struct {
 	ReceivedAt   time.Time
 	Request      RequestMessage
 	Runtime      *Runtime
+	Features     *Features
 }
 
 func (ctx AuthenticationContext) Decode(target any) error {

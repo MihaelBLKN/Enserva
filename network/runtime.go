@@ -28,6 +28,7 @@ type Runtime struct {
 	objects                  map[string]map[string]Object
 	factories                map[string]ObjectFactory
 	authenticationHandler    AuthenticationHandler
+	features                 Features
 	authenticationObjectType string
 	authenticationObjectID   string
 	mu                       sync.RWMutex
@@ -40,6 +41,10 @@ func NewRuntime(config Config) *Runtime {
 		objects:   map[string]map[string]Object{},
 		factories: map[string]ObjectFactory{},
 	}
+}
+
+func (runtime *Runtime) Features() *Features {
+	return &runtime.features
 }
 
 func (runtime *Runtime) Config() Config {
@@ -60,12 +65,14 @@ func (runtime *Runtime) RegisterObject(object Object) error {
 	}
 
 	runtime.mu.Lock()
-	defer runtime.mu.Unlock()
-
 	if runtime.objects[objectType] == nil {
 		runtime.objects[objectType] = map[string]Object{}
 	}
 	runtime.objects[objectType][objectID] = object
+	runtime.mu.Unlock()
+
+	runtime.features.DisableInterestManagement(objectType, objectID)
+	runtime.initializeObject(object, objectType, objectID)
 
 	return nil
 }
@@ -82,9 +89,8 @@ func (runtime *Runtime) RegisterAuthenticationObject(object Object) error {
 	}
 
 	runtime.mu.Lock()
-	defer runtime.mu.Unlock()
-
 	if runtime.authenticationHandler != nil {
+		runtime.mu.Unlock()
 		return fmt.Errorf("%w: %s/%s", ErrAuthenticationHandlerExists, runtime.authenticationObjectType, runtime.authenticationObjectID)
 	}
 
@@ -95,6 +101,10 @@ func (runtime *Runtime) RegisterAuthenticationObject(object Object) error {
 	runtime.authenticationHandler = handler
 	runtime.authenticationObjectType = objectType
 	runtime.authenticationObjectID = objectID
+	runtime.mu.Unlock()
+
+	runtime.features.DisableInterestManagement(objectType, objectID)
+	runtime.initializeObject(object, objectType, objectID)
 
 	return nil
 }
@@ -119,6 +129,7 @@ func (runtime *Runtime) RemoveObject(objectType, objectID string) {
 		runtime.authenticationObjectType = ""
 		runtime.authenticationObjectID = ""
 	}
+	runtime.features.DisableInterestManagement(objectType, objectID)
 }
 
 func (runtime *Runtime) GetObject(objectType, objectID string) (Object, bool) {
@@ -186,7 +197,8 @@ func (runtime *Runtime) CreateObject(objectType, objectID string) (Object, error
 			ObjectType: objectType,
 			ObjectID:   objectID,
 		},
-		Runtime: runtime,
+		Runtime:  runtime,
+		Features: runtime.Features(),
 	})
 	if err != nil {
 		return nil, err
@@ -220,6 +232,7 @@ func (runtime *Runtime) Advance() uint64 {
 		Delta:        runtime.config.TickInterval(),
 		DeltaSeconds: runtime.config.TickInterval().Seconds(),
 		Runtime:      runtime,
+		Features:     runtime.Features(),
 	}
 
 	for _, object := range runtime.objectList() {
@@ -259,6 +272,7 @@ func (runtime *Runtime) HandleRequest(ctx RequestContext) error {
 	ctx.Tick = runtime.tick
 	runtime.mu.RUnlock()
 	ctx.Runtime = runtime
+	ctx.Features = runtime.Features()
 
 	object, ok := runtime.GetObject(ctx.Request.ObjectType, ctx.Request.ObjectID)
 	if !ok {
@@ -283,6 +297,7 @@ func (runtime *Runtime) HandleAuthenticationAttempt(ctx AuthenticationContext) (
 	runtime.mu.RLock()
 	ctx.Tick = runtime.tick
 	ctx.Runtime = runtime
+	ctx.Features = runtime.Features()
 	handler := runtime.authenticationHandler
 	runtime.mu.RUnlock()
 	if handler == nil {
@@ -306,8 +321,33 @@ func (runtime *Runtime) Snapshot() SnapshotData {
 	runtime.hooksMu.Lock()
 	defer runtime.hooksMu.Unlock()
 
+	return snapshotFromObjects(runtime.objectList())
+}
+
+func (runtime *Runtime) SnapshotForClient(clientID string) SnapshotData {
+	clientID = normalizeObjectKey(clientID)
+
+	runtime.hooksMu.Lock()
+	defer runtime.hooksMu.Unlock()
+
+	objects := runtime.objectList()
+	interest := runtime.features.interestState()
+	if !interest.enabled || clientID == "" {
+		return snapshotFromObjects(objects)
+	}
+
+	playerConfig, ok := interest.playerForClient(clientID)
+	if !ok {
+		return snapshotFromObjects(objects)
+	}
+
+	playerPosition, ok := runtime.interestPositionForObject(objects, playerConfig)
+	if !ok {
+		return snapshotFromObjects(objects)
+	}
+
 	snapshot := SnapshotData{}
-	for _, object := range runtime.objectList() {
+	for _, object := range objects {
 		if visibility, ok := object.(SnapshotVisibility); ok && !visibility.SnapshotVisible() {
 			continue
 		}
@@ -317,13 +357,81 @@ func (runtime *Runtime) Snapshot() SnapshotData {
 			continue
 		}
 
-		if snapshot[objectType] == nil {
-			snapshot[objectType] = map[string]any{}
+		objectSnapshot := object.Snapshot()
+		if config, ok := interest.objectConfig(objectType, objectID); ok {
+			isSelf := objectType == playerConfig.ObjectType && objectID == playerConfig.ObjectID
+			if isSelf && !config.IncludeSelf {
+				continue
+			}
+
+			radius := playerConfig.Radius
+			if radius <= 0 {
+				radius = config.Radius
+			}
+			if !isSelf && radius > 0 {
+				objectPosition, ok := extractPosition(objectSnapshot, config)
+				if ok && !withinInterestRadius(playerPosition, objectPosition, radius) {
+					continue
+				}
+			}
 		}
-		snapshot[objectType][objectID] = object.Snapshot()
+
+		addSnapshotObject(snapshot, objectType, objectID, objectSnapshot)
 	}
 
 	return snapshot
+}
+
+func (runtime *Runtime) interestPositionForObject(objects []Object, config InterestManagementConfig) (interestPosition, bool) {
+	for _, object := range objects {
+		objectType, objectID, err := objectIdentity(object)
+		if err != nil {
+			continue
+		}
+		if objectType != config.ObjectType || objectID != config.ObjectID {
+			continue
+		}
+
+		return extractPosition(object.Snapshot(), config)
+	}
+
+	return interestPosition{}, false
+}
+
+func snapshotFromObjects(objects []Object) SnapshotData {
+	snapshot := SnapshotData{}
+	for _, object := range objects {
+		if visibility, ok := object.(SnapshotVisibility); ok && !visibility.SnapshotVisible() {
+			continue
+		}
+
+		objectType, objectID, err := objectIdentity(object)
+		if err != nil {
+			continue
+		}
+
+		addSnapshotObject(snapshot, objectType, objectID, object.Snapshot())
+	}
+
+	return snapshot
+}
+
+func addSnapshotObject(snapshot SnapshotData, objectType, objectID string, objectSnapshot any) {
+	if snapshot[objectType] == nil {
+		snapshot[objectType] = map[string]any{}
+	}
+	snapshot[objectType][objectID] = objectSnapshot
+}
+
+func (runtime *Runtime) initializeObject(object Object, objectType, objectID string) {
+	if handler, ok := object.(InitHandler); ok {
+		handler.OnInit(InitContext{
+			object:     object,
+			objectType: objectType,
+			objectID:   objectID,
+			runtime:    runtime,
+		})
+	}
 }
 
 func (runtime *Runtime) objectList() []Object {

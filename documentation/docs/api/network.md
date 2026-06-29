@@ -55,6 +55,7 @@ Every registered object must provide a type, an ID, and a serializable snapshot.
 
 | Interface               | Method                                                           | Purpose                                                         |
 | ----------------------- | ---------------------------------------------------------------- | --------------------------------------------------------------- |
+| `InitHandler`           | `OnInit(InitContext)`                                            | Called immediately after an object is registered.               |
 | `TickHandler`           | `OnTick(TickContext)`                                            | Called every tick after the runtime increments its tick number. |
 | `FullTickHandler`       | `OnFullTick(TickContext)`                                        | Called when `tick % TickRate == 0`.                             |
 | `RequestHandler`        | `OnRequest(RequestContext) error`                                | Called for requests targeting an existing object.               |
@@ -131,9 +132,11 @@ _ = object
 | `HandleRequest(ctx RequestContext) error`                                | Routes a request to the existing target object.                                         |
 | `HandleAuthenticationAttempt(ctx AuthenticationContext) (string, error)` | Invokes the registered authentication handler.                                          |
 | `Snapshot() SnapshotData`                                                | Builds the nested snapshot map for visible objects.                                     |
+| `SnapshotForClient(clientID string) SnapshotData`                        | Builds a client-specific snapshot when interest management is enabled.                  |
 | `Tick() uint64`                                                          | Returns the current runtime tick.                                                       |
 | `AuthenticationRequired() bool`                                          | Reports whether an auth handler is registered.                                          |
 | `Config() Config`                                                        | Returns the normalized config.                                                          |
+| `Features() *Features`                                                   | Returns the runtime feature registry.                                                   |
 
 `HandleRequest` fills `ReceivedAt`, `Tick`, and `Runtime` on the context before invoking the object handler.
 
@@ -243,7 +246,42 @@ type AuthenticationResponse struct {
 
 Returned by the UDP server after successful authentication.
 
+## Features
+
+### Interest Management
+
+Interest management is configured through `Runtime.Features()`:
+
+```go
+func (player *Player) OnInit(ctx network.InitContext) {
+	ctx.Runtime().Features().EnableInterestManagement(
+		network.PlayerInterest(player, "x", "y", "z", 750),
+	)
+}
+```
+
+Helper functions:
+
+| Function                                          | Purpose                                      |
+| ------------------------------------------------- | -------------------------------------------- |
+| `PlayerInterest(object, x, y, z, radius)`         | Registers a 3D player/reference object.      |
+| `PlayerInterest2D(object, x, y, radius)`          | Registers a 2D player/reference object.      |
+| `GameObjectInterest(object, x, y, z)`             | Registers a 3D object that can be filtered.  |
+| `GameObjectInterest2D(object, x, y)`              | Registers a 2D object that can be filtered.  |
+| `EnableInterestManagement(InterestManagementConfig)` | Stores interest metadata for one object. |
+
+See [Interest Management](../features/interest-management.md) for a full guide.
+
 ## Context Types
+
+### `InitContext`
+
+| Method         | Description                                      |
+| -------------- | ------------------------------------------------ |
+| `Object()`     | Object being initialized.                        |
+| `ObjectType()` | Normalized object type used for registration.    |
+| `ObjectID()`   | Normalized object ID used for registration.      |
+| `Runtime()`    | Runtime that just registered the object.         |
 
 ### `TickContext`
 
@@ -253,6 +291,7 @@ Returned by the UDP server after successful authentication.
 | `Delta`        | Tick duration.            |
 | `DeltaSeconds` | Tick duration as seconds. |
 | `Runtime`      | Runtime calling the hook. |
+| `Features`     | Runtime feature registry. |
 
 ### `RequestContext`
 
@@ -264,6 +303,7 @@ Returned by the UDP server after successful authentication.
 | `ReceivedAt` | Request timestamp.                                             |
 | `Request`    | Parsed request message.                                        |
 | `Runtime`    | Runtime routing the request.                                   |
+| `Features`   | Runtime feature registry.                                      |
 | `Response`   | Optional response writer.                                      |
 
 Methods:
@@ -286,6 +326,7 @@ Authentication context is similar to request context but carries `ConnectionID` 
 | `ReceivedAt`   | Authentication timestamp.                                       |
 | `Request`      | Parsed request message.                                         |
 | `Runtime`      | Runtime routing the authentication attempt.                     |
+| `Features`     | Runtime feature registry.                                       |
 
 Method:
 

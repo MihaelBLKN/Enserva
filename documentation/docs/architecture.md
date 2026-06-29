@@ -9,6 +9,7 @@ Enserva/
 ├── main.go                 # Example UDP host and CLI flags
 ├── network/
 │   ├── protocol.go         # Config, interfaces, message/context types
+│   ├── interest_management.go # Snapshot interest management feature
 │   ├── runtime.go          # Runtime registry, hooks, auth, snapshots
 │   ├── server.go           # Server facade
 │   └── udp.go              # UDP transport
@@ -87,8 +88,8 @@ flowchart LR
     Full -->|yes| OnFullTick["OnFullTick for full-tick handlers"]
     Full -->|no| SnapshotCheck
     OnFullTick --> SnapshotCheck{"tick % SnapshotEvery == 0?"}
-    SnapshotCheck -->|yes| Snapshot["Runtime.Snapshot"]
-    Snapshot --> Broadcast["UDP snapshot broadcast"]
+    SnapshotCheck -->|yes| Snapshot["Runtime.SnapshotForClient"]
+    Snapshot --> Broadcast["UDP snapshot broadcast per client"]
     SnapshotCheck -->|no| Done["Wait for next tick"]
 ```
 
@@ -129,8 +130,10 @@ Use these extension points for application behavior:
 | Extension point                 | Use it for                                                |
 | ------------------------------- | --------------------------------------------------------- |
 | `network.Object`                | Defining authoritative server state.                      |
+| `network.InitHandler`           | Registration-time setup such as feature registration.     |
 | `network.RequestHandler`        | Handling client actions.                                  |
 | `network.TickHandler`           | Movement, timers, physics steps, and per-tick simulation. |
 | `network.FullTickHandler`       | Once-per-second counters and lower-frequency behavior.    |
 | `network.AuthenticationHandler` | Mapping transport connections to application identities.  |
 | `network.ObjectFactory`         | Server-controlled creation of objects by type and ID.     |
+| `network.Features`              | Runtime-level opt-in features such as interest management. |

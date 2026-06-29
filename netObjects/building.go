@@ -50,6 +50,10 @@ func (building *Building) Snapshot() any {
 	return *building
 }
 
+func (building *Building) OnInit(ctx network.InitContext) {
+	ctx.Runtime().Features().EnableInterestManagement(network.GameObjectInterest(building, "x", "y", "z"))
+}
+
 func (building *Building) OnFullTick(ctx network.TickContext) {
 	building.Seconds++
 }

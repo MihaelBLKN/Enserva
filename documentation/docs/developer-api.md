@@ -52,6 +52,7 @@ These are the methods a network object can use. The first three are required bec
 | `ObjectType() string`                                                    | Yes      | `Object`                | Registration, lookup, request routing, and snapshots.            |
 | `ObjectID() string`                                                      | Yes      | `Object`                | Registration, lookup, request routing, and snapshots.            |
 | `Snapshot() any`                                                         | Yes      | `Object`                | Snapshot generation.                                             |
+| `OnInit(network.InitContext)`                                            | No       | `InitHandler`           | Immediately after the object is registered.                      |
 | `OnTick(network.TickContext)`                                            | No       | `TickHandler`           | Every runtime tick.                                              |
 | `OnFullTick(network.TickContext)`                                        | No       | `FullTickHandler`       | Once per completed second of ticks.                              |
 | `OnRequest(network.RequestContext) error`                                | No       | `RequestHandler`        | A request targets an existing object.                            |

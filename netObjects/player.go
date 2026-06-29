@@ -7,7 +7,10 @@ import (
 	"strings"
 )
 
-const defaultPlayerSpeed = 180.0
+const (
+	defaultPlayerSpeed    = 180.0
+	defaultInterestRadius = 750.0
+)
 
 var (
 	ErrUnauthorizedPlayerClient = errors.New("client is not authorized for player")
@@ -116,6 +119,10 @@ func (player *Player) ObjectID() string {
 
 func (player *Player) Snapshot() any {
 	return *player
+}
+
+func (player *Player) OnInit(ctx network.InitContext) {
+	ctx.Runtime().Features().EnableInterestManagement(network.PlayerInterest(player, "x", "y", "z", defaultInterestRadius))
 }
 
 func (player *Player) OnTick(ctx network.TickContext) {
