@@ -2,8 +2,11 @@ package network
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log"
 	"net"
+	"strings"
 	"sync"
 	"time"
 )
@@ -16,10 +19,12 @@ type UDPServer struct {
 }
 
 type UDPClient struct {
-	addr        *net.UDPAddr
-	id          string
-	lastSeq     uint64
-	lastHeardAt time.Time
+	addr          *net.UDPAddr
+	connectionID  string
+	id            string
+	authenticated bool
+	lastSeq       uint64
+	lastHeardAt   time.Time
 }
 
 func NewUDPServer(runtime *Runtime) *UDPServer {
@@ -52,13 +57,13 @@ func (server *UDPServer) ListenAndServe() error {
 			continue
 		}
 
-		if err := server.handleMessage(clientAddr, buffer[:bytesRead]); err != nil {
+		if err := server.handleMessage(conn, clientAddr, buffer[:bytesRead]); err != nil {
 			log.Println("udp request error:", err)
 		}
 	}
 }
 
-func (server *UDPServer) handleMessage(addr *net.UDPAddr, message []byte) error {
+func (server *UDPServer) handleMessage(conn *net.UDPConn, addr *net.UDPAddr, message []byte) error {
 	var request RequestMessage
 	if err := json.Unmarshal(message, &request); err != nil {
 		return err
@@ -69,12 +74,114 @@ func (server *UDPServer) handleMessage(addr *net.UDPAddr, message []byte) error 
 		return nil
 	}
 
-	return server.runtime.HandleRequest(RequestContext{
+	response := ResponseWriterFunc(func(message any) error {
+		if conn == nil {
+			return ErrResponsesUnsupported
+		}
+
+		payload, err := json.Marshal(message)
+		if err != nil {
+			return err
+		}
+
+		_, err = conn.WriteToUDP(payload, addr)
+		return err
+	})
+
+	if isAuthenticationRequest(request) {
+		return server.handleAuthenticationAttempt(client, request, response)
+	}
+
+	if server.runtime.AuthenticationRequired() && !client.authenticated {
+		err := ErrAuthenticationRequired
+		_ = response.Respond(ResponseMessage{
+			Type:     "error",
+			Sequence: request.Sequence,
+			OK:       false,
+			Error:    err.Error(),
+		})
+		return err
+	}
+
+	err := server.runtime.HandleRequest(RequestContext{
 		Transport:  "udp",
 		ClientID:   client.id,
 		ReceivedAt: time.Now(),
 		Request:    request,
+		Response:   response,
 	})
+	if err != nil {
+		_ = response.Respond(ResponseMessage{
+			Type:     "error",
+			Sequence: request.Sequence,
+			OK:       false,
+			Error:    err.Error(),
+		})
+	}
+
+	return err
+}
+
+func (server *UDPServer) handleAuthenticationAttempt(client *UDPClient, request RequestMessage, response ResponseWriter) error {
+	authenticatedID, err := server.runtime.HandleAuthenticationAttempt(AuthenticationContext{
+		Transport:    "udp",
+		ConnectionID: client.connectionID,
+		ClientID:     client.id,
+		ReceivedAt:   time.Now(),
+		Request:      request,
+	})
+	if err != nil {
+		_ = response.Respond(ResponseMessage{
+			Type:     "error",
+			Sequence: request.Sequence,
+			OK:       false,
+			Error:    err.Error(),
+		})
+		return err
+	}
+
+	if err := server.authenticateClient(client, authenticatedID); err != nil {
+		_ = response.Respond(ResponseMessage{
+			Type:     "error",
+			Sequence: request.Sequence,
+			OK:       false,
+			Error:    err.Error(),
+		})
+		return err
+	}
+
+	err = response.Respond(AuthenticationResponse{
+		Type:            "auth",
+		Sequence:        request.Sequence,
+		OK:              true,
+		ClientID:        client.id,
+		AuthenticatedID: authenticatedID,
+	})
+	if errors.Is(err, ErrResponsesUnsupported) {
+		return nil
+	}
+
+	return err
+}
+
+func (server *UDPServer) authenticateClient(client *UDPClient, authenticatedID string) error {
+	authenticatedID = strings.TrimSpace(authenticatedID)
+	if authenticatedID == "" {
+		return ErrMissingAuthenticationID
+	}
+
+	server.mu.Lock()
+	defer server.mu.Unlock()
+
+	for _, existing := range server.clients {
+		if existing != client && existing.authenticated && existing.id == authenticatedID {
+			return fmt.Errorf("%w: %s", ErrAuthenticatedClientIDInUse, authenticatedID)
+		}
+	}
+
+	client.id = authenticatedID
+	client.authenticated = true
+	return nil
 }
 
 func (server *UDPServer) acceptClientRequest(addr *net.UDPAddr, sequence uint64) (*UDPClient, bool) {
@@ -103,9 +210,10 @@ func (server *UDPServer) getOrCreateClientLocked(addr *net.UDPAddr) *UDPClient {
 	}
 
 	client = &UDPClient{
-		addr:        addr,
-		id:          "udp-" + key,
-		lastHeardAt: time.Now(),
+		addr:         addr,
+		connectionID: "udp-" + key,
+		id:           "udp-" + key,
+		lastHeardAt:  time.Now(),
 	}
 	server.clients[key] = client
 
@@ -193,10 +301,20 @@ func (server *UDPServer) snapshotClients() []UDPClient {
 	server.mu.Lock()
 	defer server.mu.Unlock()
 
+	authenticationRequired := server.runtime.AuthenticationRequired()
 	clients := make([]UDPClient, 0, len(server.clients))
 	for _, client := range server.clients {
+		if authenticationRequired && !client.authenticated {
+			continue
+		}
+
 		clients = append(clients, *client)
 	}
 
 	return clients
+}
+
+func isAuthenticationRequest(request RequestMessage) bool {
+	messageType := strings.ToLower(strings.TrimSpace(request.Type))
+	return messageType == "auth" || messageType == "authentication"
 }

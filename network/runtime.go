@@ -9,18 +9,29 @@ import (
 )
 
 var (
-	ErrMissingObjectType = errors.New("missing object type")
-	ErrMissingObjectID   = errors.New("missing object id")
-	ErrObjectNotFound    = errors.New("object not found")
+	ErrMissingObjectType                = errors.New("missing object type")
+	ErrMissingObjectID                  = errors.New("missing object id")
+	ErrObjectNotFound                   = errors.New("object not found")
+	ErrObjectExists                     = errors.New("object already exists")
+	ErrMissingAuthenticationHandler     = errors.New("missing authentication handler")
+	ErrAuthenticationHandlerExists      = errors.New("authentication handler already registered")
+	ErrAuthenticationHandlerUnsupported = errors.New("object does not handle authentication attempts")
+	ErrAuthenticationRequired           = errors.New("authentication required")
+	ErrAuthenticatedClientIDInUse       = errors.New("authenticated client id already in use")
+	ErrMissingAuthenticationID          = errors.New("missing authentication id")
+	ErrResponsesUnsupported             = errors.New("request responses are unsupported")
 )
 
 type Runtime struct {
-	config    Config
-	tick      uint64
-	objects   map[string]map[string]Object
-	factories map[string]ObjectFactory
-	mu        sync.RWMutex
-	hooksMu   sync.Mutex
+	config                   Config
+	tick                     uint64
+	objects                  map[string]map[string]Object
+	factories                map[string]ObjectFactory
+	authenticationHandler    AuthenticationHandler
+	authenticationObjectType string
+	authenticationObjectID   string
+	mu                       sync.RWMutex
+	hooksMu                  sync.Mutex
 }
 
 func NewRuntime(config Config) *Runtime {
@@ -59,6 +70,35 @@ func (runtime *Runtime) RegisterObject(object Object) error {
 	return nil
 }
 
+func (runtime *Runtime) RegisterAuthenticationObject(object Object) error {
+	handler, ok := object.(AuthenticationHandler)
+	if !ok {
+		return ErrAuthenticationHandlerUnsupported
+	}
+
+	objectType, objectID, err := objectIdentity(object)
+	if err != nil {
+		return err
+	}
+
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+
+	if runtime.authenticationHandler != nil {
+		return fmt.Errorf("%w: %s/%s", ErrAuthenticationHandlerExists, runtime.authenticationObjectType, runtime.authenticationObjectID)
+	}
+
+	if runtime.objects[objectType] == nil {
+		runtime.objects[objectType] = map[string]Object{}
+	}
+	runtime.objects[objectType][objectID] = object
+	runtime.authenticationHandler = handler
+	runtime.authenticationObjectType = objectType
+	runtime.authenticationObjectID = objectID
+
+	return nil
+}
+
 func (runtime *Runtime) RemoveObject(objectType, objectID string) {
 	objectType = normalizeObjectKey(objectType)
 	objectID = normalizeObjectKey(objectID)
@@ -73,6 +113,11 @@ func (runtime *Runtime) RemoveObject(objectType, objectID string) {
 	delete(runtime.objects[objectType], objectID)
 	if len(runtime.objects[objectType]) == 0 {
 		delete(runtime.objects, objectType)
+	}
+	if runtime.authenticationObjectType == objectType && runtime.authenticationObjectID == objectID {
+		runtime.authenticationHandler = nil
+		runtime.authenticationObjectType = ""
+		runtime.authenticationObjectID = ""
 	}
 }
 
@@ -106,6 +151,59 @@ func (runtime *Runtime) RegisterFactory(objectType string, factory ObjectFactory
 
 	runtime.factories[objectType] = factory
 	return nil
+}
+
+func (runtime *Runtime) AuthenticationRequired() bool {
+	runtime.mu.RLock()
+	defer runtime.mu.RUnlock()
+
+	return runtime.authenticationHandler != nil
+}
+
+func (runtime *Runtime) CreateObject(objectType, objectID string) (Object, error) {
+	objectType = normalizeObjectKey(objectType)
+	objectID = normalizeObjectKey(objectID)
+	if objectType == "" {
+		return nil, ErrMissingObjectType
+	}
+	if objectID == "" {
+		return nil, ErrMissingObjectID
+	}
+	if _, ok := runtime.Object(objectType, objectID); ok {
+		return nil, fmt.Errorf("%w: %s/%s", ErrObjectExists, objectType, objectID)
+	}
+
+	runtime.mu.RLock()
+	factory := runtime.factories[objectType]
+	runtime.mu.RUnlock()
+	if factory == nil {
+		return nil, fmt.Errorf("%w: %s/%s", ErrObjectNotFound, objectType, objectID)
+	}
+
+	object, err := factory.CreateObject(RequestContext{
+		ReceivedAt: time.Now(),
+		Request: RequestMessage{
+			ObjectType: objectType,
+			ObjectID:   objectID,
+		},
+		Runtime: runtime,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	createdType, createdID, err := objectIdentity(object)
+	if err != nil {
+		return nil, err
+	}
+	if createdType != objectType || createdID != objectID {
+		return nil, fmt.Errorf("factory created %s/%s for requested %s/%s", createdType, createdID, objectType, objectID)
+	}
+	if err := runtime.RegisterObject(object); err != nil {
+		return nil, err
+	}
+
+	return object, nil
 }
 
 func (runtime *Runtime) Advance() uint64 {
@@ -162,9 +260,9 @@ func (runtime *Runtime) HandleRequest(ctx RequestContext) error {
 	runtime.mu.RUnlock()
 	ctx.Runtime = runtime
 
-	object, err := runtime.objectForRequest(ctx)
-	if err != nil {
-		return err
+	object, ok := runtime.Object(ctx.Request.ObjectType, ctx.Request.ObjectID)
+	if !ok {
+		return fmt.Errorf("%w: %s/%s", ErrObjectNotFound, ctx.Request.ObjectType, ctx.Request.ObjectID)
 	}
 
 	if handler, ok := object.(RequestHandler); ok {
@@ -174,12 +272,46 @@ func (runtime *Runtime) HandleRequest(ctx RequestContext) error {
 	return nil
 }
 
+func (runtime *Runtime) HandleAuthenticationAttempt(ctx AuthenticationContext) (string, error) {
+	if ctx.ReceivedAt.IsZero() {
+		ctx.ReceivedAt = time.Now()
+	}
+
+	runtime.hooksMu.Lock()
+	defer runtime.hooksMu.Unlock()
+
+	runtime.mu.RLock()
+	ctx.Tick = runtime.tick
+	ctx.Runtime = runtime
+	handler := runtime.authenticationHandler
+	runtime.mu.RUnlock()
+	if handler == nil {
+		return "", ErrMissingAuthenticationHandler
+	}
+
+	authenticatedID, err := handler.OnAuthenticationAttempt(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	authenticatedID = normalizeObjectKey(authenticatedID)
+	if authenticatedID == "" {
+		return "", ErrMissingAuthenticationID
+	}
+
+	return authenticatedID, nil
+}
+
 func (runtime *Runtime) Snapshot() SnapshotData {
 	runtime.hooksMu.Lock()
 	defer runtime.hooksMu.Unlock()
 
 	snapshot := SnapshotData{}
 	for _, object := range runtime.objectList() {
+		if visibility, ok := object.(SnapshotVisibility); ok && !visibility.SnapshotVisible() {
+			continue
+		}
+
 		objectType, objectID, err := objectIdentity(object)
 		if err != nil {
 			continue
@@ -192,29 +324,6 @@ func (runtime *Runtime) Snapshot() SnapshotData {
 	}
 
 	return snapshot
-}
-
-func (runtime *Runtime) objectForRequest(ctx RequestContext) (Object, error) {
-	if object, ok := runtime.Object(ctx.Request.ObjectType, ctx.Request.ObjectID); ok {
-		return object, nil
-	}
-
-	runtime.mu.RLock()
-	factory := runtime.factories[ctx.Request.ObjectType]
-	runtime.mu.RUnlock()
-	if factory == nil {
-		return nil, fmt.Errorf("%w: %s/%s", ErrObjectNotFound, ctx.Request.ObjectType, ctx.Request.ObjectID)
-	}
-
-	object, err := factory.CreateObject(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if err := runtime.RegisterObject(object); err != nil {
-		return nil, err
-	}
-
-	return object, nil
 }
 
 func (runtime *Runtime) objectList() []Object {

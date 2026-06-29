@@ -34,12 +34,20 @@ func (server *Server) RegisterObject(object Object) error {
 	return server.runtime.RegisterObject(object)
 }
 
+func (server *Server) RegisterAuthenticationObject(object Object) error {
+	return server.runtime.RegisterAuthenticationObject(object)
+}
+
 func (server *Server) RemoveObject(objectType, objectID string) {
 	server.runtime.RemoveObject(objectType, objectID)
 }
 
 func (server *Server) RegisterFactory(objectType string, factory ObjectFactory) error {
 	return server.runtime.RegisterFactory(objectType, factory)
+}
+
+func (server *Server) CreateObject(objectType, objectID string) (Object, error) {
+	return server.runtime.CreateObject(objectType, objectID)
 }
 
 func (server *Server) ListenAndServe() error {

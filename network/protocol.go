@@ -84,6 +84,14 @@ type RequestHandler interface {
 	OnRequest(RequestContext) error
 }
 
+type AuthenticationHandler interface {
+	OnAuthenticationAttempt(AuthenticationContext) (string, error)
+}
+
+type SnapshotVisibility interface {
+	SnapshotVisible() bool
+}
+
 type ObjectFactory interface {
 	CreateObject(RequestContext) (Object, error)
 }
@@ -113,6 +121,36 @@ type SnapshotMessage struct {
 	Objects      SnapshotData `json:"objects"`
 }
 
+type ResponseMessage struct {
+	Type     string `json:"type"`
+	Sequence uint64 `json:"seq,omitempty"`
+	OK       bool   `json:"ok"`
+	Error    string `json:"error,omitempty"`
+	Data     any    `json:"data,omitempty"`
+}
+
+type ResponseWriter interface {
+	Respond(message any) error
+}
+
+type ResponseWriterFunc func(message any) error
+
+func (writer ResponseWriterFunc) Respond(message any) error {
+	if writer == nil {
+		return ErrResponsesUnsupported
+	}
+
+	return writer(message)
+}
+
+type AuthenticationResponse struct {
+	Type            string `json:"type"`
+	Sequence        uint64 `json:"seq,omitempty"`
+	OK              bool   `json:"ok"`
+	ClientID        string `json:"clientId"`
+	AuthenticatedID string `json:"authenticatedId"`
+}
+
 type TickContext struct {
 	Tick         uint64
 	Delta        time.Duration
@@ -127,9 +165,36 @@ type RequestContext struct {
 	ReceivedAt time.Time
 	Request    RequestMessage
 	Runtime    *Runtime
+	Response   ResponseWriter
 }
 
 func (ctx RequestContext) Decode(target any) error {
+	if len(ctx.Request.Data) == 0 {
+		return nil
+	}
+
+	return json.Unmarshal(ctx.Request.Data, target)
+}
+
+func (ctx RequestContext) Respond(message any) error {
+	if ctx.Response == nil {
+		return ErrResponsesUnsupported
+	}
+
+	return ctx.Response.Respond(message)
+}
+
+type AuthenticationContext struct {
+	Transport    string
+	ConnectionID string
+	ClientID     string
+	Tick         uint64
+	ReceivedAt   time.Time
+	Request      RequestMessage
+	Runtime      *Runtime
+}
+
+func (ctx AuthenticationContext) Decode(target any) error {
 	if len(ctx.Request.Data) == 0 {
 		return nil
 	}
