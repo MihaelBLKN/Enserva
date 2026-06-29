@@ -11,27 +11,15 @@ const (
 	defaultClientTimeout = 5 * time.Second
 )
 
-type Protocol string
-
-const (
-	ProtocolWebSocket Protocol = "ws"
-	ProtocolUDP       Protocol = "udp"
-)
-
 type Config struct {
-	Protocol      Protocol
-	HTTPAddress   string
 	UDPAddress    string
 	TickRate      int
 	SnapshotRate  int
 	ClientTimeout time.Duration
-	StaticDir     string
 }
 
 func DefaultConfig() Config {
 	return Config{
-		Protocol:      ProtocolWebSocket,
-		HTTPAddress:   ":8080",
 		UDPAddress:    ":9000",
 		TickRate:      defaultTickRate,
 		SnapshotRate:  defaultSnapshotRate,
@@ -42,12 +30,6 @@ func DefaultConfig() Config {
 func (config Config) Normalized() Config {
 	defaults := DefaultConfig()
 
-	if config.Protocol == "" {
-		config.Protocol = defaults.Protocol
-	}
-	if config.HTTPAddress == "" {
-		config.HTTPAddress = defaults.HTTPAddress
-	}
 	if config.UDPAddress == "" {
 		config.UDPAddress = defaults.UDPAddress
 	}

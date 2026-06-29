@@ -4,6 +4,10 @@ Enserva is a small Go networking API for tick-based multiplayer/server simulatio
 
 The server core does not know about players, buildings, anti-cheat, movement, collisions, or world rules. External stuff defines their own network objects and register them with the server.
 
+# NOTICE
+
+This is still very rough of a sketch, there's still a long way to go on this game server.
+
 ## Core Idea
 
 Create a normal Go package in your app, for example `netObjects`, and define objects like `player.go`, `building.go`, `projectile.go`, or anything else your game needs.
@@ -19,14 +23,12 @@ Each object can implement:
 
 `OnTick` runs every simulation tick.
 `OnFullTick` runs once per completed second of ticks. With the default `128` tick rate, it runs after every `128` ticks.
-`OnRequest` runs when a UDP/WebSocket request targets that object.
+`OnRequest` runs when a UDP request targets that object.
 
 ## Example Object Registration
 
 ```go
 server := network.NewServer(network.Config{
-	Protocol:     network.ProtocolUDP,
-	HTTPAddress:  ":8080",
 	UDPAddress:   ":9000",
 	TickRate:     128,
 	SnapshotRate: 20,
@@ -42,7 +44,7 @@ The included `netObjects` package is only an example of how you can define your 
 
 ## Request Format
 
-Send JSON through WebSocket or UDP:
+Send each request as a JSON UDP datagram:
 
 ```json
 {
@@ -61,7 +63,7 @@ If a factory is registered for `objectType`, the server can create missing objec
 
 ## Snapshot Format
 
-Clients receive snapshots like:
+Clients receive snapshots as JSON UDP datagrams:
 
 ```json
 {
@@ -84,16 +86,15 @@ Clients receive snapshots like:
 ## Run The Example Host
 
 ```bash
-go run . -networkProtocol udp
+go run .
 ```
 
 Useful flags:
 
-- `-networkProtocol` (`ws` or `udp`)
-- `-httpPort`
 - `-udpPort`
 - `-tickRate`
 - `-snapshotRate`
 - `-clientTimeout`
-- `-staticDir`
 - `-exampleObjects`
+
+Enserva starts only the UDP listener. Clients must connect to the configured UDP port directly.
