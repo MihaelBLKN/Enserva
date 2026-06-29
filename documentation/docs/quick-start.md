@@ -16,7 +16,7 @@ Tick rate: 128/s, snapshots: 20/s
 ```
 
 !!! tip
-    Use `go run . -udpPort 9100` if another process is already using port `9000`.
+Use `go run . -udpPort 9100` if another process is already using port `9000`.
 
 ## 2. Authenticate a UDP Client
 
@@ -87,7 +87,7 @@ The UDP server periodically broadcasts snapshots to active clients:
 ```
 
 !!! note
-    If an authentication object is registered, unauthenticated UDP clients do not receive snapshots and regular object requests are rejected.
+If an authentication object is registered, unauthenticated UDP clients do not receive snapshots and regular object requests are rejected.
 
 ## Minimal Server Code
 
@@ -113,4 +113,3 @@ func main() {
 	log.Fatal(server.ListenAndServe())
 }
 ```
-

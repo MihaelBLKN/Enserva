@@ -47,7 +47,7 @@ _ = building
 ```
 
 !!! warning
-    A client request to a missing `building-1` returns `ErrObjectNotFound`; it does not call `BuildingFactory`.
+A client request to a missing `building-1` returns `ErrObjectNotFound`; it does not call `BuildingFactory`.
 
 ## Write a Custom Object
 
@@ -187,5 +187,4 @@ func (door *Door) OnRequest(ctx network.RequestContext) error {
 ```
 
 !!! note
-    Direct responses are optional. `ctx.Respond` returns `ErrResponsesUnsupported` if no response writer is available.
-
+Direct responses are optional. `ctx.Respond` returns `ErrResponsesUnsupported` if no response writer is available.

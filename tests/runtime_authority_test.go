@@ -67,7 +67,7 @@ func TestRuntimeDoesNotCreateObjectsFromClientRequests(t *testing.T) {
 	if factoryCalls != 0 {
 		t.Fatalf("expected client request not to call factory, got %d calls", factoryCalls)
 	}
-	if _, ok := runtime.Object("thing", "alpha"); ok {
+	if _, ok := runtime.GetObject("thing", "alpha"); ok {
 		t.Fatalf("client request created object alpha")
 	}
 

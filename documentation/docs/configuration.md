@@ -42,7 +42,7 @@ server := network.NewServer(config)
 | `ClientTimeout <= 0`      | Uses `5s`.                             |
 
 !!! tip
-    `NewServer` and `NewRuntime` both normalize the config before storing it.
+`NewServer` and `NewRuntime` both normalize the config before storing it.
 
 ## Derived Timing
 
@@ -90,7 +90,7 @@ Client requests are JSON UDP datagrams matching `network.RequestMessage`:
 | `data`       | `Data`       | Object-specific     | Raw JSON payload decoded by the target object.                                   |
 
 !!! warning "Clients cannot create missing objects"
-    `Runtime.HandleRequest` routes only to objects that already exist. Registered factories are used by server-side calls to `CreateObject`, not by client requests.
+`Runtime.HandleRequest` routes only to objects that already exist. Registered factories are used by server-side calls to `CreateObject`, not by client requests.
 
 ## Authentication Messages
 

@@ -75,7 +75,7 @@ sequenceDiagram
 ```
 
 !!! important
-    Client requests never call factories. A request must target an object that already exists in the runtime registry.
+Client requests never call factories. A request must target an object that already exists in the runtime registry.
 
 ## Tick and Snapshot Flow
 
@@ -112,26 +112,25 @@ When authentication is required:
 
 `Runtime` uses two locks:
 
-| Lock | Purpose |
-| --- | --- |
-| `mu` | Protects tick value, object registry, factory registry, and authentication handler fields. |
+| Lock      | Purpose                                                                                                  |
+| --------- | -------------------------------------------------------------------------------------------------------- |
+| `mu`      | Protects tick value, object registry, factory registry, and authentication handler fields.               |
 | `hooksMu` | Serializes hook execution for `Advance`, `HandleRequest`, `HandleAuthenticationAttempt`, and `Snapshot`. |
 
 The UDP server also has its own mutex for the client map.
 
 !!! note
-    Hook serialization means object callbacks are not called concurrently by the runtime. Object code can still call back into runtime methods, but long-running hooks will delay ticks, requests, authentication, and snapshots.
+Hook serialization means object callbacks are not called concurrently by the runtime. Object code can still call back into runtime methods, but long-running hooks will delay ticks, requests, authentication, and snapshots.
 
 ## Extension Points
 
 Use these extension points for application behavior:
 
-| Extension point | Use it for |
-| --- | --- |
-| `network.Object` | Defining authoritative server state. |
-| `network.RequestHandler` | Handling client actions. |
-| `network.TickHandler` | Movement, timers, physics steps, and per-tick simulation. |
-| `network.FullTickHandler` | Once-per-second counters and lower-frequency behavior. |
-| `network.AuthenticationHandler` | Mapping transport connections to application identities. |
-| `network.ObjectFactory` | Server-controlled creation of objects by type and ID. |
-
+| Extension point                 | Use it for                                                |
+| ------------------------------- | --------------------------------------------------------- |
+| `network.Object`                | Defining authoritative server state.                      |
+| `network.RequestHandler`        | Handling client actions.                                  |
+| `network.TickHandler`           | Movement, timers, physics steps, and per-tick simulation. |
+| `network.FullTickHandler`       | Once-per-second counters and lower-frequency behavior.    |
+| `network.AuthenticationHandler` | Mapping transport connections to application identities.  |
+| `network.ObjectFactory`         | Server-controlled creation of objects by type and ID.     |

@@ -121,7 +121,7 @@ func (runtime *Runtime) RemoveObject(objectType, objectID string) {
 	}
 }
 
-func (runtime *Runtime) Object(objectType, objectID string) (Object, bool) {
+func (runtime *Runtime) GetObject(objectType, objectID string) (Object, bool) {
 	objectType = normalizeObjectKey(objectType)
 	objectID = normalizeObjectKey(objectID)
 
@@ -169,7 +169,7 @@ func (runtime *Runtime) CreateObject(objectType, objectID string) (Object, error
 	if objectID == "" {
 		return nil, ErrMissingObjectID
 	}
-	if _, ok := runtime.Object(objectType, objectID); ok {
+	if _, ok := runtime.GetObject(objectType, objectID); ok {
 		return nil, fmt.Errorf("%w: %s/%s", ErrObjectExists, objectType, objectID)
 	}
 
@@ -260,7 +260,7 @@ func (runtime *Runtime) HandleRequest(ctx RequestContext) error {
 	runtime.mu.RUnlock()
 	ctx.Runtime = runtime
 
-	object, ok := runtime.Object(ctx.Request.ObjectType, ctx.Request.ObjectID)
+	object, ok := runtime.GetObject(ctx.Request.ObjectType, ctx.Request.ObjectID)
 	if !ok {
 		return fmt.Errorf("%w: %s/%s", ErrObjectNotFound, ctx.Request.ObjectType, ctx.Request.ObjectID)
 	}

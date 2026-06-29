@@ -30,12 +30,12 @@ config.SnapshotRate = 10
 
 Methods:
 
-| Method | Returns | Notes |
-| --- | --- | --- |
-| `DefaultConfig()` | `Config` | `:9000`, `128` ticks/s, `20` snapshots/s, `5s` timeout. |
-| `Normalized()` | `Config` | Applies defaults and clamps snapshot rate to tick rate. |
-| `TickInterval()` | `time.Duration` | Duration between calls to `Runtime.Advance`. |
-| `SnapshotEvery()` | `uint64` | Tick interval between UDP snapshot broadcasts. |
+| Method            | Returns         | Notes                                                   |
+| ----------------- | --------------- | ------------------------------------------------------- |
+| `DefaultConfig()` | `Config`        | `:9000`, `128` ticks/s, `20` snapshots/s, `5s` timeout. |
+| `Normalized()`    | `Config`        | Applies defaults and clamps snapshot rate to tick rate. |
+| `TickInterval()`  | `time.Duration` | Duration between calls to `Runtime.Advance`.            |
+| `SnapshotEvery()` | `uint64`        | Tick interval between UDP snapshot broadcasts.          |
 
 ## Core Object Interfaces
 
@@ -53,13 +53,13 @@ Every registered object must provide a type, an ID, and a serializable snapshot.
 
 ### Optional Hooks
 
-| Interface | Method | Purpose |
-| --- | --- | --- |
-| `TickHandler` | `OnTick(TickContext)` | Called every tick after the runtime increments its tick number. |
-| `FullTickHandler` | `OnFullTick(TickContext)` | Called when `tick % TickRate == 0`. |
-| `RequestHandler` | `OnRequest(RequestContext) error` | Called for requests targeting an existing object. |
-| `AuthenticationHandler` | `OnAuthenticationAttempt(AuthenticationContext) (string, error)` | Called for authentication messages. |
-| `SnapshotVisibility` | `SnapshotVisible() bool` | Return `false` to exclude an object from snapshots. |
+| Interface               | Method                                                           | Purpose                                                         |
+| ----------------------- | ---------------------------------------------------------------- | --------------------------------------------------------------- |
+| `TickHandler`           | `OnTick(TickContext)`                                            | Called every tick after the runtime increments its tick number. |
+| `FullTickHandler`       | `OnFullTick(TickContext)`                                        | Called when `tick % TickRate == 0`.                             |
+| `RequestHandler`        | `OnRequest(RequestContext) error`                                | Called for requests targeting an existing object.               |
+| `AuthenticationHandler` | `OnAuthenticationAttempt(AuthenticationContext) (string, error)` | Called for authentication messages.                             |
+| `SnapshotVisibility`    | `SnapshotVisible() bool`                                         | Return `false` to exclude an object from snapshots.             |
 
 ## Factories
 
@@ -99,14 +99,14 @@ Creates a runtime with normalized configuration and empty object/factory maps.
 
 ### Object Management
 
-| Method | Purpose |
-| --- | --- |
-| `RegisterObject(object Object) error` | Adds or replaces an object at its `ObjectType()/ObjectID()` key. |
-| `RegisterAuthenticationObject(object Object) error` | Registers an object and binds it as the single auth handler. |
-| `RemoveObject(objectType, objectID string)` | Removes an object. Removing the auth object unbinds authentication. |
-| `Object(objectType, objectID string) (Object, bool)` | Looks up a registered object. |
-| `RegisterFactory(objectType string, factory ObjectFactory) error` | Registers a factory for server-side object creation. |
-| `CreateObject(objectType, objectID string) (Object, error)` | Creates and registers an object through a registered factory. |
+| Method                                                            | Purpose                                                             |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `RegisterObject(object Object) error`                             | Adds or replaces an object at its `ObjectType()/ObjectID()` key.    |
+| `RegisterAuthenticationObject(object Object) error`               | Registers an object and binds it as the single auth handler.        |
+| `RemoveObject(objectType, objectID string)`                       | Removes an object. Removing the auth object unbinds authentication. |
+| `GetObject(objectType, objectID string) (Object, bool)`           | Looks up a registered object.                                       |
+| `RegisterFactory(objectType string, factory ObjectFactory) error` | Registers a factory for server-side object creation.                |
+| `CreateObject(objectType, objectID string) (Object, error)`       | Creates and registers an object through a registered factory.       |
 
 `CreateObject` validates that the factory returns an object with the requested type and ID.
 
@@ -125,15 +125,15 @@ _ = object
 
 ### Simulation and Requests
 
-| Method | Purpose |
-| --- | --- |
-| `Advance() uint64` | Increments the tick, calls `OnTick`, and calls `OnFullTick` once per configured second. |
-| `HandleRequest(ctx RequestContext) error` | Routes a request to the existing target object. |
-| `HandleAuthenticationAttempt(ctx AuthenticationContext) (string, error)` | Invokes the registered authentication handler. |
-| `Snapshot() SnapshotData` | Builds the nested snapshot map for visible objects. |
-| `Tick() uint64` | Returns the current runtime tick. |
-| `AuthenticationRequired() bool` | Reports whether an auth handler is registered. |
-| `Config() Config` | Returns the normalized config. |
+| Method                                                                   | Purpose                                                                                 |
+| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
+| `Advance() uint64`                                                       | Increments the tick, calls `OnTick`, and calls `OnFullTick` once per configured second. |
+| `HandleRequest(ctx RequestContext) error`                                | Routes a request to the existing target object.                                         |
+| `HandleAuthenticationAttempt(ctx AuthenticationContext) (string, error)` | Invokes the registered authentication handler.                                          |
+| `Snapshot() SnapshotData`                                                | Builds the nested snapshot map for visible objects.                                     |
+| `Tick() uint64`                                                          | Returns the current runtime tick.                                                       |
+| `AuthenticationRequired() bool`                                          | Reports whether an auth handler is registered.                                          |
+| `Config() Config`                                                        | Returns the normalized config.                                                          |
 
 `HandleRequest` fills `ReceivedAt`, `Tick`, and `Runtime` on the context before invoking the object handler.
 
@@ -155,16 +155,16 @@ err := runtime.HandleRequest(network.RequestContext{
 
 `Server` is a small facade over `Runtime` plus transport startup.
 
-| Function or method | Purpose |
-| --- | --- |
-| `NewServer(config Config) *Server` | Creates a server with a new runtime. |
-| `ListenAndServe(config Config) error` | Convenience function for `NewServer(config).ListenAndServe()`. |
-| `Config() Config` | Returns normalized configuration. |
-| `Runtime() *Runtime` | Exposes the underlying runtime. |
-| `RegisterObject`, `RegisterAuthenticationObject`, `RemoveObject` | Delegate to the runtime. |
-| `RegisterFactory`, `CreateObject` | Delegate factory operations to the runtime. |
-| `ListenAndServe() error` | Starts the UDP listener. |
-| `ListenAndServeUDP() error` | Starts the UDP listener explicitly. |
+| Function or method                                               | Purpose                                                        |
+| ---------------------------------------------------------------- | -------------------------------------------------------------- |
+| `NewServer(config Config) *Server`                               | Creates a server with a new runtime.                           |
+| `ListenAndServe(config Config) error`                            | Convenience function for `NewServer(config).ListenAndServe()`. |
+| `Config() Config`                                                | Returns normalized configuration.                              |
+| `Runtime() *Runtime`                                             | Exposes the underlying runtime.                                |
+| `RegisterObject`, `RegisterAuthenticationObject`, `RemoveObject` | Delegate to the runtime.                                       |
+| `RegisterFactory`, `CreateObject`                                | Delegate factory operations to the runtime.                    |
+| `ListenAndServe() error`                                         | Starts the UDP listener.                                       |
+| `ListenAndServeUDP() error`                                      | Starts the UDP listener explicitly.                            |
 
 ## UDP Server
 
@@ -178,7 +178,7 @@ err := udpServer.ListenAndServe()
 `UDPServer` accepts JSON datagrams, tracks clients by UDP address, rejects duplicate or older non-zero sequence numbers, advances the runtime in a goroutine, and broadcasts snapshots at the configured rate.
 
 !!! warning
-    `UDPClient` and `UDPServer` expose no public fields. Treat their internals as implementation details.
+`UDPClient` and `UDPServer` expose no public fields. Treat their internals as implementation details.
 
 ## Message Types
 
@@ -247,50 +247,50 @@ Returned by the UDP server after successful authentication.
 
 ### `TickContext`
 
-| Field | Description |
-| --- | --- |
-| `Tick` | Current tick number. |
-| `Delta` | Tick duration. |
+| Field          | Description               |
+| -------------- | ------------------------- |
+| `Tick`         | Current tick number.      |
+| `Delta`        | Tick duration.            |
 | `DeltaSeconds` | Tick duration as seconds. |
-| `Runtime` | Runtime calling the hook. |
+| `Runtime`      | Runtime calling the hook. |
 
 ### `RequestContext`
 
-| Field | Description |
-| --- | --- |
-| `Transport` | Transport name, such as `"udp"` in the built-in UDP server. |
-| `ClientID` | Client identity assigned by the transport/authentication flow. |
-| `Tick` | Runtime tick when the request is routed. |
-| `ReceivedAt` | Request timestamp. |
-| `Request` | Parsed request message. |
-| `Runtime` | Runtime routing the request. |
-| `Response` | Optional response writer. |
+| Field        | Description                                                    |
+| ------------ | -------------------------------------------------------------- |
+| `Transport`  | Transport name, such as `"udp"` in the built-in UDP server.    |
+| `ClientID`   | Client identity assigned by the transport/authentication flow. |
+| `Tick`       | Runtime tick when the request is routed.                       |
+| `ReceivedAt` | Request timestamp.                                             |
+| `Request`    | Parsed request message.                                        |
+| `Runtime`    | Runtime routing the request.                                   |
+| `Response`   | Optional response writer.                                      |
 
 Methods:
 
-| Method | Purpose |
-| --- | --- |
-| `Decode(target any) error` | Decodes `Request.Data` JSON into `target`; no-op when data is empty. |
-| `Respond(message any) error` | Sends a direct response when supported. |
+| Method                       | Purpose                                                              |
+| ---------------------------- | -------------------------------------------------------------------- |
+| `Decode(target any) error`   | Decodes `Request.Data` JSON into `target`; no-op when data is empty. |
+| `Respond(message any) error` | Sends a direct response when supported.                              |
 
 ### `AuthenticationContext`
 
 Authentication context is similar to request context but carries `ConnectionID` and has no `ResponseWriter`.
 
-| Field | Description |
-| --- | --- |
-| `Transport` | Transport name. |
+| Field          | Description                                                     |
+| -------------- | --------------------------------------------------------------- |
+| `Transport`    | Transport name.                                                 |
 | `ConnectionID` | Transport-level connection identity, such as a UDP address key. |
-| `ClientID` | Current client ID before authentication completes. |
-| `Tick` | Runtime tick when authentication is routed. |
-| `ReceivedAt` | Authentication timestamp. |
-| `Request` | Parsed request message. |
-| `Runtime` | Runtime routing the authentication attempt. |
+| `ClientID`     | Current client ID before authentication completes.              |
+| `Tick`         | Runtime tick when authentication is routed.                     |
+| `ReceivedAt`   | Authentication timestamp.                                       |
+| `Request`      | Parsed request message.                                         |
+| `Runtime`      | Runtime routing the authentication attempt.                     |
 
 Method:
 
-| Method | Purpose |
-| --- | --- |
+| Method                     | Purpose                                                              |
+| -------------------------- | -------------------------------------------------------------------- |
 | `Decode(target any) error` | Decodes `Request.Data` JSON into `target`; no-op when data is empty. |
 
 ## Response Writers
@@ -313,16 +313,16 @@ type ResponseWriter interface {
 
 These exported errors are intended for comparison with `errors.Is`:
 
-| Error | Raised when |
-| --- | --- |
-| `ErrMissingObjectType` | An object or request lacks an object type. |
-| `ErrMissingObjectID` | An object or request lacks an object ID. |
-| `ErrObjectNotFound` | A target object or factory does not exist. |
-| `ErrObjectExists` | `CreateObject` is asked to create an existing object. |
-| `ErrMissingAuthenticationHandler` | Authentication is attempted with no registered handler. |
-| `ErrAuthenticationHandlerExists` | A second authentication object is registered. |
-| `ErrAuthenticationHandlerUnsupported` | Registered auth object does not implement `AuthenticationHandler`. |
-| `ErrAuthenticationRequired` | An unauthenticated UDP client sends a regular request while auth is required. |
-| `ErrAuthenticatedClientIDInUse` | A UDP client authenticates as an ID already used by another authenticated client. |
-| `ErrMissingAuthenticationID` | Authentication returns an empty ID. |
-| `ErrResponsesUnsupported` | A response is attempted without a response writer. |
+| Error                                 | Raised when                                                                       |
+| ------------------------------------- | --------------------------------------------------------------------------------- |
+| `ErrMissingObjectType`                | An object or request lacks an object type.                                        |
+| `ErrMissingObjectID`                  | An object or request lacks an object ID.                                          |
+| `ErrObjectNotFound`                   | A target object or factory does not exist.                                        |
+| `ErrObjectExists`                     | `CreateObject` is asked to create an existing object.                             |
+| `ErrMissingAuthenticationHandler`     | Authentication is attempted with no registered handler.                           |
+| `ErrAuthenticationHandlerExists`      | A second authentication object is registered.                                     |
+| `ErrAuthenticationHandlerUnsupported` | Registered auth object does not implement `AuthenticationHandler`.                |
+| `ErrAuthenticationRequired`           | An unauthenticated UDP client sends a regular request while auth is required.     |
+| `ErrAuthenticatedClientIDInUse`       | A UDP client authenticates as an ID already used by another authenticated client. |
+| `ErrMissingAuthenticationID`          | Authentication returns an empty ID.                                               |
+| `ErrResponsesUnsupported`             | A response is attempted without a response writer.                                |

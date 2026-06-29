@@ -29,7 +29,7 @@ func TestPlayerAuthenticatorCreatesOwnedPlayer(t *testing.T) {
 		t.Fatalf("expected player-1, got %q", playerID)
 	}
 
-	object, ok := server.Runtime().Object("player", playerID)
+	object, ok := server.Runtime().GetObject("player", playerID)
 	if !ok {
 		t.Fatalf("expected authenticated player object")
 	}
