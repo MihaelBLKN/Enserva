@@ -84,6 +84,7 @@ nav:
   - API Reference:
       - Overview: developer-api.md
       - network: api/network.md
+      - Wire Protocol: api/wire-protocol.md
       - Implementing Objects: api/netobjects.md
   - FAQ: faq.md
   - Changelog: changelog.md

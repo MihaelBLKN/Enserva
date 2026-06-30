@@ -96,7 +96,7 @@ Client requests are JSON UDP datagrams matching `network.RequestMessage`:
 | JSON field   | Go field     | Required            | Description                                                                      |
 | ------------ | ------------ | ------------------- | -------------------------------------------------------------------------------- |
 | `type`       | `Type`       | Only for auth       | `auth` or `authentication` triggers authentication.                              |
-| `seq`        | `Sequence`   | Recommended         | Monotonic sequence number; older duplicate sequences are ignored per UDP client. |
+| `seq`        | `Sequence`   | Recommended         | Monotonic sequence number. Older duplicate sequences are ignored per UDP client. |
 | `objectType` | `ObjectType` | For object requests | Target object type.                                                              |
 | `objectId`   | `ObjectID`   | For object requests | Target object ID.                                                                |
 | `action`     | `Action`     | Object-specific     | Action name interpreted by the object.                                           |
@@ -119,7 +119,7 @@ Authentication uses the same request envelope with `type` set to `auth` or `auth
 }
 ```
 
-The sample `PlayerAuthenticator` does not inspect credentials; it creates a new player for each authentication attempt. Real applications should replace it with an object that validates credentials before returning an authenticated ID.
+The sample `PlayerAuthenticator` does not inspect credentials. It creates a new player for each authentication attempt. Real applications should replace it with an object that validates credentials before returning an authenticated ID.
 
 ## Snapshot Messages
 
@@ -134,6 +134,12 @@ Snapshots match `network.SnapshotMessage`:
 | `objects`  | Nested map of object type to object ID to object snapshot. |
 
 Objects can opt out of snapshots by implementing `SnapshotVisible() bool` and returning `false`.
+
+## Binary Wire Protocol
+
+The UDP transport also accepts binary packets that start with the `ES` magic value. Binary packets carry one or more registered wire messages, sender sequence state, and acknowledgement fields. The built-in registry includes hello, welcome, ping, pong, error, disconnect, object request, player input, world snapshot, and entity delta message schemas.
+
+Use the JSON request format for simple clients and tooling. Use the binary protocol for hot-path multiplayer traffic or custom game messages. See [Wire Protocol](api/wire-protocol.md) for packet layout, message IDs, and registration examples.
 
 ## External Configuration
 

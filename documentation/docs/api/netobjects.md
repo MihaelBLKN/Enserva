@@ -82,7 +82,7 @@ Use these `network.Server` or `network.Runtime` methods to make objects availabl
 | `RegisterFactory(objectType string, factory network.ObjectFactory) error` | Register a server-side creation helper.                              |
 | `CreateObject(objectType, objectID string) (network.Object, error)`       | Create an object through a registered factory.                       |
 | `RemoveObject(objectType, objectID string)`                               | Remove an object from the runtime.                                   |
-| `Object(objectType, objectID string) (network.Object, bool)`              | Look up a registered object.                                         |
+| `GetObject(objectType, objectID string) (network.Object, bool)`           | Look up a registered object.                                         |
 
 ## Minimal Object Example
 

@@ -1,6 +1,6 @@
 # Package `network`
 
-`Enserva/network` is the core package. It owns the runtime object registry, tick advancement, request routing, authentication hook, snapshot generation, and UDP server.
+`Enserva/network` is the core package. It owns the runtime object registry, tick advancement, request routing, authentication hook, snapshot generation, binary wire protocol, and UDP server.
 
 ```go
 import "Enserva/network"
@@ -110,6 +110,8 @@ Creates a runtime with normalized configuration and empty object/factory maps.
 | `GetObject(objectType, objectID string) (Object, bool)`           | Looks up a registered object.                                       |
 | `RegisterFactory(objectType string, factory ObjectFactory) error` | Registers a factory for server-side object creation.                |
 | `CreateObject(objectType, objectID string) (Object, error)`       | Creates and registers an object through a registered factory.       |
+| `RegisterWireMessage(definition WireMessageDefinition) error`     | Registers a custom binary message definition for this runtime.      |
+| `WireMessages() *WireMessageRegistry`                             | Returns the runtime's protocol message registry.                    |
 
 `CreateObject` validates that the factory returns an object with the requested type and ID.
 
@@ -169,6 +171,7 @@ err := runtime.HandleRequest(network.RequestContext{
 | `Runtime() *Runtime`                                             | Exposes the underlying runtime.                                |
 | `RegisterObject`, `RegisterAuthenticationObject`, `RemoveObject` | Delegate to the runtime.                                       |
 | `RegisterFactory`, `CreateObject`                                | Delegate factory operations to the runtime.                    |
+| `RegisterWireMessage`                                             | Delegate custom binary message registration to the runtime.     |
 | `ListenAndServe() error`                                         | Starts the UDP listener.                                       |
 | `ListenAndServeUDP() error`                                      | Starts the UDP listener explicitly.                            |
 | `ListenAndServeDebug() error`                                    | Starts only the debug HTTP listener.                           |
@@ -187,7 +190,7 @@ udpServer := network.NewUDPServer(runtime)
 err := udpServer.ListenAndServe()
 ```
 
-`UDPServer` accepts JSON datagrams, tracks clients by UDP address, rejects duplicate or older non-zero sequence numbers, advances the runtime in a goroutine, and broadcasts snapshots at the configured rate.
+`UDPServer` accepts JSON datagrams and binary wire packets, tracks clients by UDP address, rejects duplicate or older non-zero sequence numbers, advances the runtime in a goroutine, and broadcasts snapshots at the configured rate.
 
 !!! warning
 `UDPClient` and `UDPServer` expose no public fields. Treat their internals as implementation details.
@@ -255,6 +258,81 @@ type AuthenticationResponse struct {
 
 Returned by the UDP server after successful authentication.
 
+## Wire Protocol API
+
+The UDP transport accepts binary packets that start with `WireProtocolMagic` and `WireProtocolVersion`. See [Wire Protocol](wire-protocol.md) for the packet layout.
+
+### Constants
+
+| Constant                         | Value range or meaning                                      |
+| -------------------------------- | ----------------------------------------------------------- |
+| `WireProtocolMagic`              | `0x4553`, the ASCII bytes `ES`.                             |
+| `WireProtocolVersion`            | Current binary packet version.                              |
+| `MaxWirePayloadSize`             | Maximum packet payload size accepted by the encoder.        |
+| `MaxWireMessagePayloadSize`      | Maximum payload size for one framed message.                |
+| `WireMessageSystemMin/Max`       | Reserved system message ID range, `0x0000-0x00ff`.          |
+| `WireMessageEngineMin/Max`       | Built-in engine message ID range, `0x0100-0x0fff`.          |
+| `WireMessageGameMin/Max`         | Custom game message ID range, `0x1000-0xffff`.              |
+
+### Built-In Message IDs
+
+| Message ID constant             | Typed payload          | Direction                  |
+| ------------------------------- | ---------------------- | -------------------------- |
+| `WireMessageClientHello`        | `ClientHello`          | Client to server.          |
+| `WireMessageWelcome`            | `Welcome`              | Server to client.          |
+| `WireMessagePing`               | `Ping`                 | Client to server.          |
+| `WireMessagePong`               | `Pong`                 | Server to client.          |
+| `WireMessageError`              | `ErrorMessage`         | Server to client.          |
+| `WireMessageDisconnect`         | `DisconnectMessage`    | Server to client.          |
+| `WireMessageObjectRequest`      | `ObjectRequest`        | Client to server.          |
+| `WireMessagePlayerInput`        | `PlayerInput`          | Client to server.          |
+| `WireMessageWorldSnapshot`      | `WorldSnapshot`        | Server to client.          |
+| `WireMessageEntitySpawn`        | `EntitySpawn`          | Server to client.          |
+| `WireMessageEntityDespawn`      | `EntityDespawn`        | Server to client.          |
+| `WireMessageEntityUpdate`       | `EntityUpdate`         | Server to client.          |
+
+### Packet Helpers
+
+| Function                                                          | Purpose                                                            |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `EncodePacket(sequence uint64, messages []WireMessage)`           | Frames encoded messages with zero acknowledgement fields.          |
+| `EncodePacketWithAcks(sequence, ack, ackBits uint64, messages []WireMessage)` | Frames encoded messages with acknowledgement state.       |
+| `DecodePacket(data []byte) (WirePacket, error)`                   | Validates and splits a binary packet into framed messages.         |
+| `EncodeClientMessage(message any) (WireMessage, error)`           | Encodes a typed client message using the default registry.         |
+| `DecodeClientMessage(message WireMessage) (any, error)`           | Decodes one framed client message using the default registry.      |
+| `EncodeServerMessage(message any) (WireMessage, error)`           | Encodes a typed server message using the default registry.         |
+| `DecodeServerMessage(message WireMessage) (any, error)`           | Decodes one framed server message using the default registry.      |
+
+### Registry Types
+
+`WireMessageRegistry` stores schemas by numeric ID and Go message type. Runtime instances own separate registries, while package-level helpers use `DefaultWireMessages()`.
+
+```go
+type WireMessageDefinition struct {
+	ID          WireMessageType
+	Name        string
+	Direction   WireMessageDirection
+	MessageType reflect.Type
+	Encode      WireMessageEncoder
+	Decode      WireMessageDecoder
+	Validate    WireMessageValidator
+	Handler     WireMessageHandler
+}
+```
+
+| Method or function                                      | Purpose                                                        |
+| ------------------------------------------------------- | -------------------------------------------------------------- |
+| `NewWireMessageRegistry()`                              | Creates an empty registry.                                     |
+| `NewDefaultWireMessageRegistry()`                       | Creates a registry with Enserva's built-in messages.           |
+| `DefaultWireMessages()`                                 | Returns the process-wide default registry.                     |
+| `Register(definition WireMessageDefinition) error`      | Adds one message schema.                                       |
+| `Definition(id WireMessageType) (WireMessageDefinition, bool)` | Looks up a schema by ID.                              |
+| `EncodeMessage(message any) (WireMessage, error)`       | Encodes a typed message by Go type.                            |
+| `DecodeMessage(message WireMessage) (any, error)`       | Decodes a framed message or returns `UnknownWireMessage`.      |
+| `Dispatch(ctx WireMessageContext) (bool, error)`        | Calls a registered handler when one exists.                    |
+
+`WireMessageContext` gives handlers access to transport, client, sequence, ack, message, runtime, and response writer fields.
+
 ## Features
 
 ### Interest Management
@@ -311,6 +389,7 @@ See [Interest Management](../features/interest-management.md) for a full guide.
 | `Tick`       | Runtime tick when the request is routed.                       |
 | `ReceivedAt` | Request timestamp.                                             |
 | `Request`    | Parsed request message.                                        |
+| `Payload`    | Protocol-decoded payload for binary messages when available.    |
 | `Runtime`    | Runtime routing the request.                                   |
 | `Features`   | Runtime feature registry.                                      |
 | `Response`   | Optional response writer.                                      |
@@ -319,7 +398,7 @@ Methods:
 
 | Method                       | Purpose                                                              |
 | ---------------------------- | -------------------------------------------------------------------- |
-| `Decode(target any) error`   | Decodes `Request.Data` JSON into `target`; no-op when data is empty. |
+| `Decode(target any) error`   | Decodes binary `Payload` or JSON `Request.Data` into `target`.       |
 | `Respond(message any) error` | Sends a direct response when supported.                              |
 
 ### `AuthenticationContext`
@@ -334,6 +413,7 @@ Authentication context is similar to request context but carries `ConnectionID` 
 | `Tick`         | Runtime tick when authentication is routed.                     |
 | `ReceivedAt`   | Authentication timestamp.                                       |
 | `Request`      | Parsed request message.                                         |
+| `Payload`      | Protocol-decoded payload for binary messages when available.     |
 | `Runtime`      | Runtime routing the authentication attempt.                     |
 | `Features`     | Runtime feature registry.                                       |
 
@@ -341,7 +421,7 @@ Method:
 
 | Method                     | Purpose                                                              |
 | -------------------------- | -------------------------------------------------------------------- |
-| `Decode(target any) error` | Decodes `Request.Data` JSON into `target`; no-op when data is empty. |
+| `Decode(target any) error` | Decodes binary `Payload` or JSON `Request.Data` into `target`.       |
 
 ## Response Writers
 
@@ -376,3 +456,18 @@ These exported errors are intended for comparison with `errors.Is`:
 | `ErrAuthenticatedClientIDInUse`       | A UDP client authenticates as an ID already used by another authenticated client. |
 | `ErrMissingAuthenticationID`          | Authentication returns an empty ID.                                               |
 | `ErrResponsesUnsupported`             | A response is attempted without a response writer.                                |
+| `ErrInvalidWirePacket`                | A binary packet has invalid framing, length, or message count.                    |
+| `ErrUnsupportedWireVersion`           | A packet uses a protocol version this build does not support.                     |
+| `ErrWirePacketTooLarge`               | A packet exceeds the configured wire payload size.                                |
+| `ErrWireMessageTooLarge`              | One framed message exceeds the configured payload size.                           |
+| `ErrWireStringTooLarge`               | A string field exceeds the configured wire string limit.                          |
+| `ErrMalformedWirePayload`             | A typed wire message payload is truncated or malformed.                           |
+| `ErrUnsupportedWireMessage`           | Encoding was requested for an unregistered message type.                          |
+| `ErrUnsupportedWireSnapshotValue`     | Snapshot encoding found a value kind the wire format cannot represent.            |
+| `ErrWireMessageRegistered`            | A wire message ID or Go type is already registered.                               |
+| `ErrWireMessageTypeOutOfRange`        | A wire message ID is outside the known reserved ranges.                           |
+| `ErrMissingWireMessageCodec`          | A wire message definition has no encoder or decoder.                              |
+| `ErrMissingWireMessageName`           | A wire message definition has no name.                                            |
+| `ErrMissingWireMessageType`           | A wire message definition has no Go message type.                                 |
+| `ErrWireMessageValidation`            | A wire message validator rejected a decoded or encoded message.                   |
+| `ErrMissingWireMessageRegistry`       | A nil wire registry was used.                                                     |

@@ -4,8 +4,8 @@ Enserva exposes one core API package and one example object package:
 
 | Package                                   | Purpose                                                                                                                                          |
 | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [`Enserva/network`](api/network.md)       | Core runtime, server, UDP transport, object interfaces, request/snapshot messages, and error values.                                             |
-| [`Enserva/netObjects`](api/netobjects.md) | Example object implementations. This package demonstrates how a user-owned object package can be structured; it is not the framework's core API. |
+| [`Enserva/network`](api/network.md)       | Core runtime, server, UDP transport, binary wire protocol, object interfaces, request/snapshot messages, and error values.                       |
+| [`Enserva/netObjects`](api/netobjects.md) | Example object implementations. This package demonstrates how a user-owned object package can be structured. It is not the framework's core API. |
 
 The README describes `netObjects` as an example package name. In your own app, create a normal Go package for authoritative objects, such as `netObjects`, `world`, `entities`, or `serverstate`, and implement the interfaces from `network`.
 
@@ -45,7 +45,7 @@ return server.ListenAndServe()
 
 ## Object Method Summary
 
-These are the methods a network object can use. The first three are required because they make up `network.Object`; the rest are optional hooks detected by interface assertions at runtime.
+These are the methods a network object can use. The first three are required because they make up `network.Object`. The rest are optional hooks detected by interface assertions at runtime.
 
 | Method                                                                   | Required | Interface               | Called when                                                      |
 | ------------------------------------------------------------------------ | -------- | ----------------------- | ---------------------------------------------------------------- |
@@ -66,9 +66,10 @@ Factories are separate from objects:
 | `CreateObject(network.RequestContext) (network.Object, error)` | `ObjectFactory` | Server code calls `Runtime.CreateObject` or `Server.CreateObject`. |
 
 !!! note
-Enserva has no exported constants. Package-level exported variables are error sentinels used with `errors.Is`.
+Most package-level exported variables are error sentinels used with `errors.Is`. The package also exports wire protocol constants for packet versioning, message IDs, and message ID ranges.
 
 ## Package References
 
 - [`network`](api/network.md)
+- [`Wire Protocol`](api/wire-protocol.md)
 - [`Implementing Objects`](api/netobjects.md)

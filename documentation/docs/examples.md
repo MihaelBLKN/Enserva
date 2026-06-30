@@ -47,7 +47,7 @@ _ = building
 ```
 
 !!! warning
-A client request to a missing `building-1` returns `ErrObjectNotFound`; it does not call `BuildingFactory`.
+A client request to a missing `building-1` returns `ErrObjectNotFound`. It does not call `BuildingFactory`.
 
 ## Write a Custom Object
 

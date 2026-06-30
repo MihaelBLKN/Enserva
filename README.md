@@ -9,7 +9,7 @@ The core idea is simple: your server owns the world. You define objects such as 
 - Authoritative server-side object registry.
 - Configurable tick rate and snapshot rate.
 - Optional object hooks for initialization, per-tick updates, once-per-second updates, client requests, authentication, and snapshot visibility.
-- UDP transport with request sequencing, client tracking, authentication gating, and JSON messages.
+- UDP transport with request sequencing, client tracking, authentication gating, JSON messages, and binary wire packets.
 - Server-side object factories for controlled object creation.
 - Snapshot broadcasting grouped by object type and object ID.
 - Per-client interest management for filtering snapshot objects with a spatial hash.
@@ -67,6 +67,7 @@ The full docs live in `documentation/docs` and can be built with MkDocs Material
 - [Configuration](https://mihaelblkn.github.io/Enserva/configuration/)
 - [Architecture](https://mihaelblkn.github.io/Enserva/architecture/)
 - [Features](https://mihaelblkn.github.io/Enserva/features/interest-management/)
+- [Wire Protocol](https://mihaelblkn.github.io/Enserva/api/wire-protocol/)
 - [API Reference](https://mihaelblkn.github.io/Enserva/developer-api/)
 
 ## License

@@ -34,4 +34,4 @@ Enserva ships with a UDP transport. Runtime contexts include a `Transport` field
 
 ## Is there a stable wire protocol?
 
-The JSON shapes are documented in [Configuration](configuration.md), but the project is still early. Treat the protocol as provisional until releases document compatibility guarantees.
+The current JSON request shapes are documented in [Configuration](configuration.md), and the binary packet format is documented in [Wire Protocol](api/wire-protocol.md). The project is still early, so treat both protocols as provisional until releases document compatibility guarantees.

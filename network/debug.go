@@ -430,7 +430,7 @@ func debugObjectStates(objects []Object) []DebugObjectState {
 		visible, visibleError := debugSnapshotVisible(object)
 		if visibleError != "" {
 			if snapshotError != "" {
-				snapshotError += "; "
+				snapshotError += ", "
 			}
 			snapshotError += visibleError
 		}

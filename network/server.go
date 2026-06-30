@@ -66,6 +66,11 @@ func (server *Server) RegisterFactory(objectType string, factory ObjectFactory) 
 	return server.runtime.RegisterFactory(objectType, factory)
 }
 
+// RegisterWireMessage adds a custom binary protocol message definition.
+func (server *Server) RegisterWireMessage(definition WireMessageDefinition) error {
+	return server.runtime.RegisterWireMessage(definition)
+}
+
 // CreateObject creates and registers an object through a registered factory.
 func (server *Server) CreateObject(objectType, objectID string) (Object, error) {
 	return server.runtime.CreateObject(objectType, objectID)

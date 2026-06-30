@@ -228,6 +228,7 @@ type RequestContext struct {
 	Tick       uint64
 	ReceivedAt time.Time
 	Request    RequestMessage
+	Payload    any
 	Runtime    *Runtime
 	Features   *Features
 	Response   ResponseWriter
@@ -235,6 +236,9 @@ type RequestContext struct {
 
 // Decode unmarshals the request payload into target.
 func (ctx RequestContext) Decode(target any) error {
+	if ctx.Payload != nil {
+		return decodePayload(ctx.Payload, target)
+	}
 	if len(ctx.Request.Data) == 0 {
 		return nil
 	}
@@ -259,12 +263,16 @@ type AuthenticationContext struct {
 	Tick         uint64
 	ReceivedAt   time.Time
 	Request      RequestMessage
+	Payload      any
 	Runtime      *Runtime
 	Features     *Features
 }
 
 // Decode unmarshals the authentication payload into target.
 func (ctx AuthenticationContext) Decode(target any) error {
+	if ctx.Payload != nil {
+		return decodePayload(ctx.Payload, target)
+	}
 	if len(ctx.Request.Data) == 0 {
 		return nil
 	}

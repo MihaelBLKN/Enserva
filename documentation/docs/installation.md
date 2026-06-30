@@ -49,6 +49,8 @@ Useful flags:
 | `-snapshotRate`   | `20`    | Snapshot broadcasts per second.                                  |
 | `-clientTimeout`  | `5s`    | UDP client inactivity timeout.                                   |
 | `-exampleObjects` | `true`  | Register the sample player, building, and authenticator objects. |
+| `-debug`          | `false` | Serve the browser debug interface.                               |
+| `-debugAddr`      | `:9100` | Debug interface HTTP address.                                    |
 
 Example:
 

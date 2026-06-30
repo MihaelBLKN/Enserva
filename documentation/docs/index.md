@@ -9,11 +9,12 @@ Enserva is still an early project. Treat the documented APIs as a guide to the p
 
 - Authoritative server-side object registry.
 - Tick loop with per-tick and full-second hooks.
-- UDP request routing to existing objects.
+- UDP request routing to existing objects with JSON and binary packet support.
 - Snapshot broadcasting with per-object visibility controls.
 - Per-client interest management for snapshot filtering.
 - Optional object-based authentication flow.
 - Server-side object factories for controlled creation.
+- Browser debug UI for runtime, transport, feature, and object state.
 - Example `player`, `building`, and authenticator objects.
 
 ## Quick Installation
@@ -52,14 +53,15 @@ func main() {
 
 ## Documentation Map
 
-| Section                           | Purpose                                                           |
-| --------------------------------- | ----------------------------------------------------------------- |
-| [Installation](installation.md)   | Toolchain, clone, build, test, and local docs setup.              |
-| [Quick Start](quick-start.md)     | Start the included host and send a first UDP message.             |
-| [Features](features/interest-management.md) | Feature guides, including interest management.                    |
-| [Configuration](configuration.md) | Runtime config, CLI flags, UDP messages, and supported options.   |
-| [Architecture](architecture.md)   | Runtime layout, request flow, snapshots, and concurrency model.   |
-| [Developer API](developer-api.md) | Public package overview and links to detailed package references. |
-| [Examples](examples.md)           | Tutorials built from the README, tests, and sample objects.       |
-| [FAQ](faq.md)                     | Common usage and design questions.                                |
-| [Changelog](changelog.md)         | Release notes and project history.                                |
+| Section                           | Purpose                                                                   |
+| --------------------------------- | ------------------------------------------------------------------------- |
+| [Installation](installation.md)   | Toolchain, clone, build, test, and local docs setup.                      |
+| [Quick Start](quick-start.md)     | Start the included host and send a first UDP message.                     |
+| [Features](features/interest-management.md) | Feature guides, including interest management.                            |
+| [Configuration](configuration.md) | Runtime config, CLI flags, UDP messages, and supported options.           |
+| [Architecture](architecture.md)   | Runtime layout, request flow, snapshots, wire packets, and concurrency.   |
+| [Developer API](developer-api.md) | Public package overview and links to detailed package references.         |
+| [Wire Protocol](api/wire-protocol.md) | Binary UDP packet format, built-in message IDs, and custom game messages. |
+| [Examples](examples.md)           | Tutorials built from the README, tests, and sample objects.               |
+| [FAQ](faq.md)                     | Common usage and design questions.                                        |
+| [Changelog](changelog.md)         | Release notes and project history.                                        |

@@ -39,6 +39,7 @@ type Runtime struct {
 	tick                     uint64
 	objects                  map[string]map[string]Object
 	factories                map[string]ObjectFactory
+	wireMessages             *WireMessageRegistry
 	authenticationHandler    AuthenticationHandler
 	features                 Features
 	authenticationObjectType string
@@ -50,9 +51,10 @@ type Runtime struct {
 // NewRuntime creates a runtime with normalized configuration.
 func NewRuntime(config Config) *Runtime {
 	return &Runtime{
-		config:    config.Normalized(),
-		objects:   map[string]map[string]Object{},
-		factories: map[string]ObjectFactory{},
+		config:       config.Normalized(),
+		objects:      map[string]map[string]Object{},
+		factories:    map[string]ObjectFactory{},
+		wireMessages: NewDefaultWireMessageRegistry(),
 	}
 }
 
@@ -64,6 +66,16 @@ func (runtime *Runtime) Features() *Features {
 // Config returns the normalized runtime configuration.
 func (runtime *Runtime) Config() Config {
 	return runtime.config
+}
+
+// WireMessages returns the runtime's protocol message registry.
+func (runtime *Runtime) WireMessages() *WireMessageRegistry {
+	return runtime.wireMessages
+}
+
+// RegisterWireMessage adds a custom protocol message definition to this runtime.
+func (runtime *Runtime) RegisterWireMessage(definition WireMessageDefinition) error {
+	return runtime.wireMessages.Register(definition)
 }
 
 // Tick returns the current simulation tick.
