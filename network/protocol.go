@@ -9,6 +9,7 @@ const (
 	defaultTickRate      = 128
 	defaultSnapshotRate  = 20
 	defaultClientTimeout = 5 * time.Second
+	defaultDebugAddress  = ":9100"
 )
 
 type Config struct {
@@ -16,17 +17,22 @@ type Config struct {
 	TickRate      int
 	SnapshotRate  int
 	ClientTimeout time.Duration
+	DebugEnabled  bool
+	DebugAddress  string
 }
 
+// DefaultConfig returns the default server configuration.
 func DefaultConfig() Config {
 	return Config{
 		UDPAddress:    ":9000",
 		TickRate:      defaultTickRate,
 		SnapshotRate:  defaultSnapshotRate,
 		ClientTimeout: defaultClientTimeout,
+		DebugAddress:  defaultDebugAddress,
 	}
 }
 
+// Normalized fills missing configuration fields and clamps invalid rates.
 func (config Config) Normalized() Config {
 	defaults := DefaultConfig()
 
@@ -45,16 +51,21 @@ func (config Config) Normalized() Config {
 	if config.ClientTimeout <= 0 {
 		config.ClientTimeout = defaults.ClientTimeout
 	}
+	if config.DebugAddress == "" {
+		config.DebugAddress = defaults.DebugAddress
+	}
 
 	return config
 }
 
+// TickInterval returns the duration between simulation ticks.
 func (config Config) TickInterval() time.Duration {
 	config = config.Normalized()
 
 	return time.Second / time.Duration(config.TickRate)
 }
 
+// SnapshotEvery returns the tick interval between outbound snapshots.
 func (config Config) SnapshotEvery() uint64 {
 	config = config.Normalized()
 
@@ -66,46 +77,57 @@ func (config Config) SnapshotEvery() uint64 {
 	return uint64(every)
 }
 
+// Object is the minimal interface for values managed by the runtime.
 type Object interface {
 	ObjectType() string
 	ObjectID() string
 	Snapshot() any
 }
 
+// InitHandler runs after an object is registered with a runtime.
 type InitHandler interface {
 	OnInit(InitContext)
 }
 
+// TickHandler runs on every simulation tick.
 type TickHandler interface {
 	OnTick(TickContext)
 }
 
+// FullTickHandler runs once per configured tick-rate window.
 type FullTickHandler interface {
 	OnFullTick(TickContext)
 }
 
+// RequestHandler handles client requests routed to an object.
 type RequestHandler interface {
 	OnRequest(RequestContext) error
 }
 
+// AuthenticationHandler validates authentication requests and returns the authenticated client id.
 type AuthenticationHandler interface {
 	OnAuthenticationAttempt(AuthenticationContext) (string, error)
 }
 
+// SnapshotVisibility controls whether an object is included in snapshots.
 type SnapshotVisibility interface {
 	SnapshotVisible() bool
 }
 
+// ObjectFactory creates runtime objects from server-side requests.
 type ObjectFactory interface {
 	CreateObject(RequestContext) (Object, error)
 }
 
+// ObjectFactoryFunc adapts a function into an ObjectFactory.
 type ObjectFactoryFunc func(RequestContext) (Object, error)
 
+// CreateObject calls factory with ctx.
 func (factory ObjectFactoryFunc) CreateObject(ctx RequestContext) (Object, error) {
 	return factory(ctx)
 }
 
+// RequestMessage is the JSON request format accepted by transports.
 type RequestMessage struct {
 	Type       string          `json:"type,omitempty"`
 	Sequence   uint64          `json:"seq,omitempty"`
@@ -115,8 +137,10 @@ type RequestMessage struct {
 	Data       json.RawMessage `json:"data,omitempty"`
 }
 
+// SnapshotData groups object snapshots by object type and id.
 type SnapshotData map[string]map[string]any
 
+// SnapshotMessage is sent by transports to publish the current runtime state.
 type SnapshotMessage struct {
 	Type         string       `json:"type"`
 	ClientID     string       `json:"clientId,omitempty"`
@@ -125,6 +149,7 @@ type SnapshotMessage struct {
 	Objects      SnapshotData `json:"objects"`
 }
 
+// ResponseMessage is the standard request response envelope.
 type ResponseMessage struct {
 	Type     string `json:"type"`
 	Sequence uint64 `json:"seq,omitempty"`
@@ -133,12 +158,15 @@ type ResponseMessage struct {
 	Data     any    `json:"data,omitempty"`
 }
 
+// ResponseWriter sends an immediate response to a request.
 type ResponseWriter interface {
 	Respond(message any) error
 }
 
+// ResponseWriterFunc adapts a function into a ResponseWriter.
 type ResponseWriterFunc func(message any) error
 
+// Respond sends message through writer.
 func (writer ResponseWriterFunc) Respond(message any) error {
 	if writer == nil {
 		return ErrResponsesUnsupported
@@ -147,6 +175,7 @@ func (writer ResponseWriterFunc) Respond(message any) error {
 	return writer(message)
 }
 
+// AuthenticationResponse reports a successful authentication attempt.
 type AuthenticationResponse struct {
 	Type            string `json:"type"`
 	Sequence        uint64 `json:"seq,omitempty"`
@@ -155,6 +184,7 @@ type AuthenticationResponse struct {
 	AuthenticatedID string `json:"authenticatedId"`
 }
 
+// InitContext describes the object being initialized.
 type InitContext struct {
 	object     Object
 	objectType string
@@ -162,22 +192,27 @@ type InitContext struct {
 	runtime    *Runtime
 }
 
+// Object returns the object being initialized.
 func (ctx InitContext) Object() Object {
 	return ctx.object
 }
 
+// ObjectType returns the initialized object's type.
 func (ctx InitContext) ObjectType() string {
 	return ctx.objectType
 }
 
+// ObjectID returns the initialized object's id.
 func (ctx InitContext) ObjectID() string {
 	return ctx.objectID
 }
 
+// Runtime returns the runtime that owns the initialized object.
 func (ctx InitContext) Runtime() *Runtime {
 	return ctx.runtime
 }
 
+// TickContext describes the current simulation tick.
 type TickContext struct {
 	Tick         uint64
 	Delta        time.Duration
@@ -186,6 +221,7 @@ type TickContext struct {
 	Features     *Features
 }
 
+// RequestContext describes a client request routed through the runtime.
 type RequestContext struct {
 	Transport  string
 	ClientID   string
@@ -197,6 +233,7 @@ type RequestContext struct {
 	Response   ResponseWriter
 }
 
+// Decode unmarshals the request payload into target.
 func (ctx RequestContext) Decode(target any) error {
 	if len(ctx.Request.Data) == 0 {
 		return nil
@@ -205,6 +242,7 @@ func (ctx RequestContext) Decode(target any) error {
 	return json.Unmarshal(ctx.Request.Data, target)
 }
 
+// Respond sends an immediate response through the request transport.
 func (ctx RequestContext) Respond(message any) error {
 	if ctx.Response == nil {
 		return ErrResponsesUnsupported
@@ -213,6 +251,7 @@ func (ctx RequestContext) Respond(message any) error {
 	return ctx.Response.Respond(message)
 }
 
+// AuthenticationContext describes an authentication request.
 type AuthenticationContext struct {
 	Transport    string
 	ConnectionID string
@@ -224,6 +263,7 @@ type AuthenticationContext struct {
 	Features     *Features
 }
 
+// Decode unmarshals the authentication payload into target.
 func (ctx AuthenticationContext) Decode(target any) error {
 	if len(ctx.Request.Data) == 0 {
 		return nil

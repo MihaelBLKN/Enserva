@@ -13,6 +13,7 @@ The core idea is simple: your server owns the world. You define objects such as 
 - Server-side object factories for controlled object creation.
 - Snapshot broadcasting grouped by object type and object ID.
 - Per-client interest management for filtering snapshot objects by distance.
+- Optional browser debug UI for runtime state, config, UDP clients, features, and object snapshots.
 - Example `Player`, `Building`, and authentication objects.
 
 ## Project Status
@@ -48,7 +49,15 @@ Run the included example host:
 go run .
 ```
 
-Useful flags include `-udpPort`, `-tickRate`, `-snapshotRate`, `-clientTimeout`, and `-exampleObjects`.
+Useful flags include `-udpPort`, `-tickRate`, `-snapshotRate`, `-clientTimeout`, `-exampleObjects`, `-debug`, and `-debugAddr`.
+
+Launch the debug interface:
+
+```bash
+go run . -debug
+```
+
+Then open `http://localhost:9100`.
 
 ## Documentation
 

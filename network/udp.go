@@ -11,13 +11,27 @@ import (
 	"time"
 )
 
+// UDPServer serves the runtime protocol over UDP.
 type UDPServer struct {
-	address string
-	clients map[string]*UDPClient
-	runtime *Runtime
-	mu      sync.Mutex
+	address           string
+	clients           map[string]*UDPClient
+	runtime           *Runtime
+	startedAt         time.Time
+	datagramsReceived uint64
+	requestsAccepted  uint64
+	requestsDropped   uint64
+	requestErrors     uint64
+	authAttempts      uint64
+	authSuccesses     uint64
+	authFailures      uint64
+	snapshotsSent     uint64
+	snapshotErrors    uint64
+	clientsCreated    uint64
+	clientsRemoved    uint64
+	mu                sync.Mutex
 }
 
+// UDPClient tracks a client address and authentication state.
 type UDPClient struct {
 	addr          *net.UDPAddr
 	connectionID  string
@@ -27,14 +41,17 @@ type UDPClient struct {
 	lastHeardAt   time.Time
 }
 
+// NewUDPServer creates a UDP transport for runtime.
 func NewUDPServer(runtime *Runtime) *UDPServer {
 	return &UDPServer{
-		address: runtime.Config().UDPAddress,
-		clients: map[string]*UDPClient{},
-		runtime: runtime,
+		address:   runtime.Config().UDPAddress,
+		clients:   map[string]*UDPClient{},
+		runtime:   runtime,
+		startedAt: time.Now(),
 	}
 }
 
+// ListenAndServe binds the UDP socket and handles requests until the socket fails.
 func (server *UDPServer) ListenAndServe() error {
 	addr, err := net.ResolveUDPAddr("udp", server.address)
 	if err != nil {
@@ -63,9 +80,13 @@ func (server *UDPServer) ListenAndServe() error {
 	}
 }
 
+// handleMessage decodes a datagram and routes it through authentication or request handling.
 func (server *UDPServer) handleMessage(conn *net.UDPConn, addr *net.UDPAddr, message []byte) error {
+	server.recordDatagram()
+
 	var request RequestMessage
 	if err := json.Unmarshal(message, &request); err != nil {
+		server.recordRequestError()
 		return err
 	}
 
@@ -111,6 +132,7 @@ func (server *UDPServer) handleMessage(conn *net.UDPConn, addr *net.UDPAddr, mes
 		Response:   response,
 	})
 	if err != nil {
+		server.recordRequestError()
 		_ = response.Respond(ResponseMessage{
 			Type:     "error",
 			Sequence: request.Sequence,
@@ -122,7 +144,10 @@ func (server *UDPServer) handleMessage(conn *net.UDPConn, addr *net.UDPAddr, mes
 	return err
 }
 
+// handleAuthenticationAttempt authenticates a client and sends the transport response.
 func (server *UDPServer) handleAuthenticationAttempt(client *UDPClient, request RequestMessage, response ResponseWriter) error {
+	server.recordAuthAttempt()
+
 	authenticatedID, err := server.runtime.HandleAuthenticationAttempt(AuthenticationContext{
 		Transport:    "udp",
 		ConnectionID: client.connectionID,
@@ -131,6 +156,7 @@ func (server *UDPServer) handleAuthenticationAttempt(client *UDPClient, request 
 		Request:      request,
 	})
 	if err != nil {
+		server.recordAuthFailure()
 		_ = response.Respond(ResponseMessage{
 			Type:     "error",
 			Sequence: request.Sequence,
@@ -141,6 +167,7 @@ func (server *UDPServer) handleAuthenticationAttempt(client *UDPClient, request 
 	}
 
 	if err := server.authenticateClient(client, authenticatedID); err != nil {
+		server.recordAuthFailure()
 		_ = response.Respond(ResponseMessage{
 			Type:     "error",
 			Sequence: request.Sequence,
@@ -149,6 +176,7 @@ func (server *UDPServer) handleAuthenticationAttempt(client *UDPClient, request 
 		})
 		return err
 	}
+	server.recordAuthSuccess()
 
 	err = response.Respond(AuthenticationResponse{
 		Type:            "auth",
@@ -164,6 +192,7 @@ func (server *UDPServer) handleAuthenticationAttempt(client *UDPClient, request 
 	return err
 }
 
+// authenticateClient assigns an authenticated id if no other client owns it.
 func (server *UDPServer) authenticateClient(client *UDPClient, authenticatedID string) error {
 	authenticatedID = strings.TrimSpace(authenticatedID)
 	if authenticatedID == "" {
@@ -184,6 +213,7 @@ func (server *UDPServer) authenticateClient(client *UDPClient, authenticatedID s
 	return nil
 }
 
+// acceptClientRequest updates client state and rejects stale sequenced requests.
 func (server *UDPServer) acceptClientRequest(addr *net.UDPAddr, sequence uint64) (*UDPClient, bool) {
 	server.mu.Lock()
 	defer server.mu.Unlock()
@@ -192,16 +222,20 @@ func (server *UDPServer) acceptClientRequest(addr *net.UDPAddr, sequence uint64)
 	client.lastHeardAt = time.Now()
 
 	if sequence == 0 {
+		server.requestsAccepted++
 		return client, true
 	}
 	if sequence <= client.lastSeq {
+		server.requestsDropped++
 		return client, false
 	}
 
 	client.lastSeq = sequence
+	server.requestsAccepted++
 	return client, true
 }
 
+// getOrCreateClientLocked returns the client for addr while server.mu is held.
 func (server *UDPServer) getOrCreateClientLocked(addr *net.UDPAddr) *UDPClient {
 	key := addr.String()
 	client, ok := server.clients[key]
@@ -216,10 +250,12 @@ func (server *UDPServer) getOrCreateClientLocked(addr *net.UDPAddr) *UDPClient {
 		lastHeardAt:  time.Now(),
 	}
 	server.clients[key] = client
+	server.clientsCreated++
 
 	return client
 }
 
+// runTickLoop advances the runtime and broadcasts snapshots on each tick.
 func (server *UDPServer) runTickLoop(conn *net.UDPConn) {
 	ticker := time.NewTicker(server.runtime.Config().TickInterval())
 	defer ticker.Stop()
@@ -231,6 +267,7 @@ func (server *UDPServer) runTickLoop(conn *net.UDPConn) {
 	}
 }
 
+// advanceAndMaybeBroadcast advances the runtime and sends snapshots on snapshot ticks.
 func (server *UDPServer) advanceAndMaybeBroadcast(conn *net.UDPConn) error {
 	tick := server.runtime.Advance()
 	server.removeStaleClients(time.Now())
@@ -246,8 +283,11 @@ func (server *UDPServer) advanceAndMaybeBroadcast(conn *net.UDPConn) error {
 
 	for _, snapshot := range snapshots {
 		if _, err := conn.WriteToUDP(snapshot.payload, snapshot.addr); err != nil {
+			server.recordSnapshotError()
 			log.Println("udp broadcast error:", err)
+			continue
 		}
+		server.recordSnapshotSent()
 	}
 
 	return nil
@@ -258,6 +298,7 @@ type udpSnapshot struct {
 	payload []byte
 }
 
+// snapshots builds one serialized snapshot per eligible client.
 func (server *UDPServer) snapshots() ([]udpSnapshot, error) {
 	tick := server.runtime.Tick()
 	clients := server.snapshotClients()
@@ -285,6 +326,7 @@ func (server *UDPServer) snapshots() ([]udpSnapshot, error) {
 	return snapshots, nil
 }
 
+// removeStaleClients drops clients that have exceeded the configured timeout.
 func (server *UDPServer) removeStaleClients(now time.Time) {
 	server.mu.Lock()
 	defer server.mu.Unlock()
@@ -293,10 +335,12 @@ func (server *UDPServer) removeStaleClients(now time.Time) {
 	for key, client := range server.clients {
 		if now.Sub(client.lastHeardAt) > timeout {
 			delete(server.clients, key)
+			server.clientsRemoved++
 		}
 	}
 }
 
+// snapshotClients returns clients eligible to receive snapshots.
 func (server *UDPServer) snapshotClients() []UDPClient {
 	server.mu.Lock()
 	defer server.mu.Unlock()
@@ -314,7 +358,64 @@ func (server *UDPServer) snapshotClients() []UDPClient {
 	return clients
 }
 
+// isAuthenticationRequest reports whether request should be routed to authentication.
 func isAuthenticationRequest(request RequestMessage) bool {
 	messageType := strings.ToLower(strings.TrimSpace(request.Type))
 	return messageType == "auth" || messageType == "authentication"
+}
+
+// recordDatagram increments the received datagram counter.
+func (server *UDPServer) recordDatagram() {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+
+	server.datagramsReceived++
+}
+
+// recordRequestError increments the request error counter.
+func (server *UDPServer) recordRequestError() {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+
+	server.requestErrors++
+}
+
+// recordAuthAttempt increments the authentication attempt counter.
+func (server *UDPServer) recordAuthAttempt() {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+
+	server.authAttempts++
+}
+
+// recordAuthSuccess increments the authentication success counter.
+func (server *UDPServer) recordAuthSuccess() {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+
+	server.authSuccesses++
+}
+
+// recordAuthFailure increments the authentication failure counter.
+func (server *UDPServer) recordAuthFailure() {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+
+	server.authFailures++
+}
+
+// recordSnapshotSent increments the sent snapshot counter.
+func (server *UDPServer) recordSnapshotSent() {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+
+	server.snapshotsSent++
+}
+
+// recordSnapshotError increments the snapshot error counter.
+func (server *UDPServer) recordSnapshotError() {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+
+	server.snapshotErrors++
 }

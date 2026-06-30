@@ -16,6 +16,8 @@ type Config struct {
 	TickRate      int
 	SnapshotRate  int
 	ClientTimeout time.Duration
+	DebugEnabled  bool
+	DebugAddress  string
 }
 ```
 
@@ -32,7 +34,7 @@ Methods:
 
 | Method            | Returns         | Notes                                                   |
 | ----------------- | --------------- | ------------------------------------------------------- |
-| `DefaultConfig()` | `Config`        | `:9000`, `128` ticks/s, `20` snapshots/s, `5s` timeout. |
+| `DefaultConfig()` | `Config`        | `:9000`, `128` ticks/s, `20` snapshots/s, `5s` timeout, debug at `:9100` when enabled. |
 | `Normalized()`    | `Config`        | Applies defaults and clamps snapshot rate to tick rate. |
 | `TickInterval()`  | `time.Duration` | Duration between calls to `Runtime.Advance`.            |
 | `SnapshotEvery()` | `uint64`        | Tick interval between UDP snapshot broadcasts.          |
@@ -133,6 +135,7 @@ _ = object
 | `HandleAuthenticationAttempt(ctx AuthenticationContext) (string, error)` | Invokes the registered authentication handler.                                          |
 | `Snapshot() SnapshotData`                                                | Builds the nested snapshot map for visible objects.                                     |
 | `SnapshotForClient(clientID string) SnapshotData`                        | Builds a client-specific snapshot when interest management is enabled.                  |
+| `DebugState() DebugRuntimeState`                                         | Builds a full debug snapshot including hidden objects, factories, and auth state.       |
 | `Tick() uint64`                                                          | Returns the current runtime tick.                                                       |
 | `AuthenticationRequired() bool`                                          | Reports whether an auth handler is registered.                                          |
 | `Config() Config`                                                        | Returns the normalized config.                                                          |
@@ -168,6 +171,12 @@ err := runtime.HandleRequest(network.RequestContext{
 | `RegisterFactory`, `CreateObject`                                | Delegate factory operations to the runtime.                    |
 | `ListenAndServe() error`                                         | Starts the UDP listener.                                       |
 | `ListenAndServeUDP() error`                                      | Starts the UDP listener explicitly.                            |
+| `ListenAndServeDebug() error`                                    | Starts only the debug HTTP listener.                           |
+| `DebugHandler() http.Handler`                                    | Returns the debug UI and JSON API handler.                     |
+| `DebugState() DebugState`                                        | Returns the current server debug snapshot.                     |
+| `UDPServer() *UDPServer`                                         | Returns the active UDP server after startup, when available.   |
+
+When `Config.DebugEnabled` is true, `ListenAndServeUDP` starts the debug HTTP listener in a goroutine before serving UDP. The UI is available at `/` and `/debug`, while `/debug/state` returns JSON containing normalized config, runtime state, feature state, UDP clients, transport counters, and object snapshots.
 
 ## UDP Server
 

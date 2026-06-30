@@ -9,19 +9,31 @@ import (
 )
 
 var (
-	ErrMissingObjectType                = errors.New("missing object type")
-	ErrMissingObjectID                  = errors.New("missing object id")
-	ErrObjectNotFound                   = errors.New("object not found")
-	ErrObjectExists                     = errors.New("object already exists")
-	ErrMissingAuthenticationHandler     = errors.New("missing authentication handler")
-	ErrAuthenticationHandlerExists      = errors.New("authentication handler already registered")
+	// ErrMissingObjectType indicates an empty object type.
+	ErrMissingObjectType = errors.New("missing object type")
+	// ErrMissingObjectID indicates an empty object id.
+	ErrMissingObjectID = errors.New("missing object id")
+	// ErrObjectNotFound indicates that the requested object is not registered.
+	ErrObjectNotFound = errors.New("object not found")
+	// ErrObjectExists indicates that an object already exists for the requested identity.
+	ErrObjectExists = errors.New("object already exists")
+	// ErrMissingAuthenticationHandler indicates that authentication was requested without a handler.
+	ErrMissingAuthenticationHandler = errors.New("missing authentication handler")
+	// ErrAuthenticationHandlerExists indicates that the runtime already has an authentication handler.
+	ErrAuthenticationHandlerExists = errors.New("authentication handler already registered")
+	// ErrAuthenticationHandlerUnsupported indicates that an object cannot handle authentication attempts.
 	ErrAuthenticationHandlerUnsupported = errors.New("object does not handle authentication attempts")
-	ErrAuthenticationRequired           = errors.New("authentication required")
-	ErrAuthenticatedClientIDInUse       = errors.New("authenticated client id already in use")
-	ErrMissingAuthenticationID          = errors.New("missing authentication id")
-	ErrResponsesUnsupported             = errors.New("request responses are unsupported")
+	// ErrAuthenticationRequired indicates that a request requires prior authentication.
+	ErrAuthenticationRequired = errors.New("authentication required")
+	// ErrAuthenticatedClientIDInUse indicates that another connection already owns the authenticated id.
+	ErrAuthenticatedClientIDInUse = errors.New("authenticated client id already in use")
+	// ErrMissingAuthenticationID indicates that authentication succeeded without returning an id.
+	ErrMissingAuthenticationID = errors.New("missing authentication id")
+	// ErrResponsesUnsupported indicates that the current transport cannot send immediate responses.
+	ErrResponsesUnsupported = errors.New("request responses are unsupported")
 )
 
+// Runtime owns registered objects and advances the authoritative simulation.
 type Runtime struct {
 	config                   Config
 	tick                     uint64
@@ -35,6 +47,7 @@ type Runtime struct {
 	hooksMu                  sync.Mutex
 }
 
+// NewRuntime creates a runtime with normalized configuration.
 func NewRuntime(config Config) *Runtime {
 	return &Runtime{
 		config:    config.Normalized(),
@@ -43,14 +56,17 @@ func NewRuntime(config Config) *Runtime {
 	}
 }
 
+// Features returns the runtime's optional feature registry.
 func (runtime *Runtime) Features() *Features {
 	return &runtime.features
 }
 
+// Config returns the normalized runtime configuration.
 func (runtime *Runtime) Config() Config {
 	return runtime.config
 }
 
+// Tick returns the current simulation tick.
 func (runtime *Runtime) Tick() uint64 {
 	runtime.mu.RLock()
 	defer runtime.mu.RUnlock()
@@ -58,6 +74,7 @@ func (runtime *Runtime) Tick() uint64 {
 	return runtime.tick
 }
 
+// RegisterObject adds object to the runtime and runs its initialization hook.
 func (runtime *Runtime) RegisterObject(object Object) error {
 	objectType, objectID, err := objectIdentity(object)
 	if err != nil {
@@ -77,6 +94,7 @@ func (runtime *Runtime) RegisterObject(object Object) error {
 	return nil
 }
 
+// RegisterAuthenticationObject registers object as the sole authentication handler.
 func (runtime *Runtime) RegisterAuthenticationObject(object Object) error {
 	handler, ok := object.(AuthenticationHandler)
 	if !ok {
@@ -109,6 +127,7 @@ func (runtime *Runtime) RegisterAuthenticationObject(object Object) error {
 	return nil
 }
 
+// RemoveObject removes an object and clears related authentication or interest state.
 func (runtime *Runtime) RemoveObject(objectType, objectID string) {
 	objectType = normalizeObjectKey(objectType)
 	objectID = normalizeObjectKey(objectID)
@@ -132,6 +151,7 @@ func (runtime *Runtime) RemoveObject(objectType, objectID string) {
 	runtime.features.DisableInterestManagement(objectType, objectID)
 }
 
+// GetObject returns a registered object by type and id.
 func (runtime *Runtime) GetObject(objectType, objectID string) (Object, bool) {
 	objectType = normalizeObjectKey(objectType)
 	objectID = normalizeObjectKey(objectID)
@@ -148,6 +168,7 @@ func (runtime *Runtime) GetObject(objectType, objectID string) (Object, bool) {
 	return object, ok
 }
 
+// RegisterFactory stores a factory for server-side object creation.
 func (runtime *Runtime) RegisterFactory(objectType string, factory ObjectFactory) error {
 	objectType = normalizeObjectKey(objectType)
 	if objectType == "" {
@@ -164,6 +185,7 @@ func (runtime *Runtime) RegisterFactory(objectType string, factory ObjectFactory
 	return nil
 }
 
+// AuthenticationRequired reports whether the runtime has an authentication handler.
 func (runtime *Runtime) AuthenticationRequired() bool {
 	runtime.mu.RLock()
 	defer runtime.mu.RUnlock()
@@ -171,6 +193,7 @@ func (runtime *Runtime) AuthenticationRequired() bool {
 	return runtime.authenticationHandler != nil
 }
 
+// CreateObject creates and registers an object through a registered factory.
 func (runtime *Runtime) CreateObject(objectType, objectID string) (Object, error) {
 	objectType = normalizeObjectKey(objectType)
 	objectID = normalizeObjectKey(objectID)
@@ -218,6 +241,7 @@ func (runtime *Runtime) CreateObject(objectType, objectID string) (Object, error
 	return object, nil
 }
 
+// Advance increments the simulation tick and runs object tick hooks.
 func (runtime *Runtime) Advance() uint64 {
 	runtime.hooksMu.Lock()
 	defer runtime.hooksMu.Unlock()
@@ -252,6 +276,7 @@ func (runtime *Runtime) Advance() uint64 {
 	return tick
 }
 
+// HandleRequest routes a client request to the addressed object.
 func (runtime *Runtime) HandleRequest(ctx RequestContext) error {
 	ctx.Request.ObjectType = normalizeObjectKey(ctx.Request.ObjectType)
 	ctx.Request.ObjectID = normalizeObjectKey(ctx.Request.ObjectID)
@@ -286,6 +311,7 @@ func (runtime *Runtime) HandleRequest(ctx RequestContext) error {
 	return nil
 }
 
+// HandleAuthenticationAttempt routes an authentication request to the registered handler.
 func (runtime *Runtime) HandleAuthenticationAttempt(ctx AuthenticationContext) (string, error) {
 	if ctx.ReceivedAt.IsZero() {
 		ctx.ReceivedAt = time.Now()
@@ -317,6 +343,7 @@ func (runtime *Runtime) HandleAuthenticationAttempt(ctx AuthenticationContext) (
 	return authenticatedID, nil
 }
 
+// Snapshot returns the visible state of all registered objects.
 func (runtime *Runtime) Snapshot() SnapshotData {
 	runtime.hooksMu.Lock()
 	defer runtime.hooksMu.Unlock()
@@ -324,6 +351,7 @@ func (runtime *Runtime) Snapshot() SnapshotData {
 	return snapshotFromObjects(runtime.objectList())
 }
 
+// SnapshotForClient returns the visible state for a client after interest filtering.
 func (runtime *Runtime) SnapshotForClient(clientID string) SnapshotData {
 	clientID = normalizeObjectKey(clientID)
 
@@ -382,6 +410,7 @@ func (runtime *Runtime) SnapshotForClient(clientID string) SnapshotData {
 	return snapshot
 }
 
+// interestPositionForObject returns the configured position for an object in objects.
 func (runtime *Runtime) interestPositionForObject(objects []Object, config InterestManagementConfig) (interestPosition, bool) {
 	for _, object := range objects {
 		objectType, objectID, err := objectIdentity(object)
@@ -398,6 +427,7 @@ func (runtime *Runtime) interestPositionForObject(objects []Object, config Inter
 	return interestPosition{}, false
 }
 
+// snapshotFromObjects builds a snapshot from visible objects.
 func snapshotFromObjects(objects []Object) SnapshotData {
 	snapshot := SnapshotData{}
 	for _, object := range objects {
@@ -416,6 +446,7 @@ func snapshotFromObjects(objects []Object) SnapshotData {
 	return snapshot
 }
 
+// addSnapshotObject inserts a single object snapshot into snapshot.
 func addSnapshotObject(snapshot SnapshotData, objectType, objectID string, objectSnapshot any) {
 	if snapshot[objectType] == nil {
 		snapshot[objectType] = map[string]any{}
@@ -423,6 +454,7 @@ func addSnapshotObject(snapshot SnapshotData, objectType, objectID string, objec
 	snapshot[objectType][objectID] = objectSnapshot
 }
 
+// initializeObject runs the object's initialization hook when present.
 func (runtime *Runtime) initializeObject(object Object, objectType, objectID string) {
 	if handler, ok := object.(InitHandler); ok {
 		handler.OnInit(InitContext{
@@ -434,6 +466,7 @@ func (runtime *Runtime) initializeObject(object Object, objectType, objectID str
 	}
 }
 
+// objectList returns a point-in-time slice of registered objects.
 func (runtime *Runtime) objectList() []Object {
 	runtime.mu.RLock()
 	defer runtime.mu.RUnlock()
@@ -448,6 +481,7 @@ func (runtime *Runtime) objectList() []Object {
 	return objects
 }
 
+// objectIdentity validates and normalizes an object's identity.
 func objectIdentity(object Object) (string, string, error) {
 	if object == nil {
 		return "", "", errors.New("nil object")
@@ -466,6 +500,7 @@ func objectIdentity(object Object) (string, string, error) {
 	return objectType, objectID, nil
 }
 
+// normalizeObjectKey trims whitespace from object identity fields.
 func normalizeObjectKey(value string) string {
 	return strings.TrimSpace(value)
 }

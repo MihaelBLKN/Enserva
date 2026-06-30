@@ -13,14 +13,17 @@ type authorityTestObject struct {
 	requests int
 }
 
+// ObjectType returns the authority test object type.
 func (object *authorityTestObject) ObjectType() string {
 	return "thing"
 }
 
+// ObjectID returns the configured authority test object id.
 func (object *authorityTestObject) ObjectID() string {
 	return object.id
 }
 
+// Snapshot returns observable state for authority tests.
 func (object *authorityTestObject) Snapshot() any {
 	return map[string]any{
 		"id":       object.id,
@@ -29,6 +32,7 @@ func (object *authorityTestObject) Snapshot() any {
 	}
 }
 
+// OnRequest applies the requested value and records the request count.
 func (object *authorityTestObject) OnRequest(ctx network.RequestContext) error {
 	var payload struct {
 		Value int `json:"value"`
@@ -42,6 +46,7 @@ func (object *authorityTestObject) OnRequest(ctx network.RequestContext) error {
 	return nil
 }
 
+// TestRuntimeDoesNotCreateObjectsFromClientRequests verifies clients cannot create authority objects.
 func TestRuntimeDoesNotCreateObjectsFromClientRequests(t *testing.T) {
 	runtime := network.NewRuntime(network.Config{})
 	factoryCalls := 0

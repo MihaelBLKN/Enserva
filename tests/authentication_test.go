@@ -14,18 +14,22 @@ type authenticationTestObject struct {
 	calls    int
 }
 
+// ObjectType returns the authentication object type used by tests.
 func (object *authenticationTestObject) ObjectType() string {
 	return "auth"
 }
 
+// ObjectID returns the configured test object id.
 func (object *authenticationTestObject) ObjectID() string {
 	return object.id
 }
 
+// Snapshot returns no state for the authentication test object.
 func (object *authenticationTestObject) Snapshot() any {
 	return nil
 }
 
+// OnAuthenticationAttempt accepts the test token and returns the configured id.
 func (object *authenticationTestObject) OnAuthenticationAttempt(ctx network.AuthenticationContext) (string, error) {
 	object.calls++
 
@@ -47,23 +51,28 @@ type routeClientTestObject struct {
 	clientID string
 }
 
+// ObjectType returns the request route object type used by tests.
 func (object *routeClientTestObject) ObjectType() string {
 	return "thing"
 }
 
+// ObjectID returns the configured route target id.
 func (object *routeClientTestObject) ObjectID() string {
 	return object.id
 }
 
+// Snapshot returns no state for the route target test object.
 func (object *routeClientTestObject) Snapshot() any {
 	return nil
 }
 
+// OnRequest records the client id routed by the runtime.
 func (object *routeClientTestObject) OnRequest(ctx network.RequestContext) error {
 	object.clientID = ctx.ClientID
 	return nil
 }
 
+// TestRuntimeBindsOneAuthenticationObject verifies that a runtime owns one authentication handler.
 func TestRuntimeBindsOneAuthenticationObject(t *testing.T) {
 	runtime := network.NewRuntime(network.Config{})
 	authenticator := &authenticationTestObject{id: "primary", returnID: "player-a"}
@@ -104,6 +113,7 @@ func TestRuntimeBindsOneAuthenticationObject(t *testing.T) {
 	}
 }
 
+// TestAuthenticationReturnedIDAuthorizesLaterRequests verifies that authenticated ids are used for routing.
 func TestAuthenticationReturnedIDAuthorizesLaterRequests(t *testing.T) {
 	runtime := network.NewRuntime(network.Config{})
 	if err := runtime.RegisterAuthenticationObject(&authenticationTestObject{id: "primary", returnID: "player-a"}); err != nil {

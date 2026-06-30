@@ -39,14 +39,17 @@ type interestTaggedSnapshot struct {
 	PositionZ float64 `json:"positionZ,omitempty"`
 }
 
+// ObjectType returns the configured interest test object type.
 func (object *interestTestObject) ObjectType() string {
 	return object.objectType
 }
 
+// ObjectID returns the configured interest test object id.
 func (object *interestTestObject) ObjectID() string {
 	return object.id
 }
 
+// Snapshot returns either plain or JSON-tagged coordinates for interest tests.
 func (object *interestTestObject) Snapshot() any {
 	if object.tagged {
 		return interestTaggedSnapshot{
@@ -65,10 +68,12 @@ func (object *interestTestObject) Snapshot() any {
 	}
 }
 
+// SnapshotVisible reports whether the test object should be included in snapshots.
 func (object *interestTestObject) SnapshotVisible() bool {
 	return !object.hidden
 }
 
+// OnInit records initialization context and optionally registers interest management.
 func (object *interestTestObject) OnInit(ctx network.InitContext) {
 	object.initCalls++
 	object.initType = ctx.ObjectType()
@@ -100,6 +105,7 @@ func (object *interestTestObject) OnInit(ctx network.InitContext) {
 	})
 }
 
+// TestRegisterObjectCallsOnInit verifies that registration invokes object initialization.
 func TestRegisterObjectCallsOnInit(t *testing.T) {
 	runtime := network.NewRuntime(network.Config{})
 	object := &interestTestObject{objectType: "thing", id: "alpha"}
@@ -116,6 +122,7 @@ func TestRegisterObjectCallsOnInit(t *testing.T) {
 	}
 }
 
+// TestSnapshotForClientReturnsFullSnapshotWhenInterestDisabled verifies the unfiltered snapshot path.
 func TestSnapshotForClientReturnsFullSnapshotWhenInterestDisabled(t *testing.T) {
 	runtime := network.NewRuntime(network.Config{})
 	mustRegisterInterestObject(t, runtime, &interestTestObject{objectType: "player", id: "player-1"})
@@ -130,6 +137,7 @@ func TestSnapshotForClientReturnsFullSnapshotWhenInterestDisabled(t *testing.T) 
 	}
 }
 
+// TestSnapshotForClientFiltersManagedObjectsByPlayerInterest verifies distance-based interest filtering.
 func TestSnapshotForClientFiltersManagedObjectsByPlayerInterest(t *testing.T) {
 	runtime := network.NewRuntime(network.Config{})
 	mustRegisterInterestObject(t, runtime, &interestTestObject{
@@ -185,6 +193,7 @@ func TestSnapshotForClientFiltersManagedObjectsByPlayerInterest(t *testing.T) {
 	}
 }
 
+// TestSnapshotForClientSupportsJSONTagged3DFields verifies tagged coordinate lookup in 3D snapshots.
 func TestSnapshotForClientSupportsJSONTagged3DFields(t *testing.T) {
 	runtime := network.NewRuntime(network.Config{})
 	mustRegisterInterestObject(t, runtime, &interestTestObject{
@@ -230,6 +239,7 @@ func TestSnapshotForClientSupportsJSONTagged3DFields(t *testing.T) {
 	}
 }
 
+// mustRegisterInterestObject registers object or fails the current test.
 func mustRegisterInterestObject(t *testing.T, runtime *network.Runtime, object network.Object) {
 	t.Helper()
 
@@ -238,6 +248,7 @@ func mustRegisterInterestObject(t *testing.T, runtime *network.Runtime, object n
 	}
 }
 
+// hasSnapshotObject reports whether snapshot includes an object identity.
 func hasSnapshotObject(snapshot network.SnapshotData, objectType, objectID string) bool {
 	objectsByID := snapshot[objectType]
 	if objectsByID == nil {

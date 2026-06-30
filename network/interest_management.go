@@ -8,18 +8,23 @@ import (
 	"sync"
 )
 
+// InterestSubject identifies how an object participates in interest management.
 type InterestSubject string
 
+// Features contains optional runtime systems shared with object handlers.
 type Features struct {
 	mu       sync.RWMutex
 	interest *InterestManager
 }
 
 const (
-	InterestPlayer     InterestSubject = "Player"
+	// InterestPlayer marks an object as a player whose position filters snapshots.
+	InterestPlayer InterestSubject = "Player"
+	// InterestGameObject marks an object as a position-aware object that may be filtered.
 	InterestGameObject InterestSubject = "GameObject"
 )
 
+// InterestManagementConfig describes how an object's snapshot position is read.
 type InterestManagementConfig struct {
 	SubjectType InterestSubject
 	ObjectType  string
@@ -31,6 +36,7 @@ type InterestManagementConfig struct {
 	IncludeSelf bool
 }
 
+// PlayerInterest creates an interest configuration for a player object.
 func PlayerInterest(object Object, xField, yField, zField string, radius float64) InterestManagementConfig {
 	config := objectInterestConfig(InterestPlayer, object, xField, yField, zField)
 	config.Radius = radius
@@ -38,18 +44,22 @@ func PlayerInterest(object Object, xField, yField, zField string, radius float64
 	return config
 }
 
+// PlayerInterest2D creates a two-dimensional interest configuration for a player object.
 func PlayerInterest2D(object Object, xField, yField string, radius float64) InterestManagementConfig {
 	return PlayerInterest(object, xField, yField, "", radius)
 }
 
+// GameObjectInterest creates an interest configuration for a non-player object.
 func GameObjectInterest(object Object, xField, yField, zField string) InterestManagementConfig {
 	return objectInterestConfig(InterestGameObject, object, xField, yField, zField)
 }
 
+// GameObjectInterest2D creates a two-dimensional interest configuration for a non-player object.
 func GameObjectInterest2D(object Object, xField, yField string) InterestManagementConfig {
 	return GameObjectInterest(object, xField, yField, "")
 }
 
+// InterestManager stores the active interest-management registrations.
 type InterestManager struct {
 	enabled bool
 	players map[string]InterestManagementConfig
@@ -63,6 +73,7 @@ type interestPosition struct {
 	HasZ bool
 }
 
+// InterestManagement returns the manager, creating it when features is non-nil.
 func (features *Features) InterestManagement() *InterestManager {
 	if features == nil {
 		return nil
@@ -78,6 +89,7 @@ func (features *Features) InterestManagement() *InterestManager {
 	return features.interest
 }
 
+// EnableInterestManagement registers config and enables filtering once a player is configured.
 func (features *Features) EnableInterestManagement(config InterestManagementConfig) {
 	if features == nil {
 		return
@@ -106,6 +118,7 @@ func (features *Features) EnableInterestManagement(config InterestManagementConf
 	features.interest.enabled = len(features.interest.players) > 0
 }
 
+// DisableInterestManagement removes any interest registration for objectType and objectID.
 func (features *Features) DisableInterestManagement(objectType, objectID string) {
 	if features == nil {
 		return
@@ -130,6 +143,7 @@ func (features *Features) DisableInterestManagement(objectType, objectID string)
 	features.interest.enabled = len(features.interest.players) > 0
 }
 
+// extractPosition reads configured coordinate fields from a snapshot.
 func extractPosition(snapshot any, config InterestManagementConfig) (interestPosition, bool) {
 	x, ok := snapshotNumber(snapshot, config.XField)
 	if !ok {
@@ -160,6 +174,7 @@ func extractPosition(snapshot any, config InterestManagementConfig) (interestPos
 	return position, true
 }
 
+// withinInterestRadius reports whether b is within radius of a.
 func withinInterestRadius(a, b interestPosition, radius float64) bool {
 	dx := a.X - b.X
 	dy := a.Y - b.Y
@@ -178,6 +193,7 @@ type interestState struct {
 	objects map[string]InterestManagementConfig
 }
 
+// newInterestManager creates an empty manager.
 func newInterestManager() *InterestManager {
 	return &InterestManager{
 		players: map[string]InterestManagementConfig{},
@@ -185,6 +201,7 @@ func newInterestManager() *InterestManager {
 	}
 }
 
+// interestState returns a snapshot of active interest-management settings.
 func (features *Features) interestState() interestState {
 	if features == nil {
 		return interestState{}
@@ -212,6 +229,7 @@ func (features *Features) interestState() interestState {
 	return state
 }
 
+// playerForClient finds the player interest config bound to clientID.
 func (state interestState) playerForClient(clientID string) (InterestManagementConfig, bool) {
 	clientID = normalizeObjectKey(clientID)
 	if clientID == "" {
@@ -227,6 +245,7 @@ func (state interestState) playerForClient(clientID string) (InterestManagementC
 	return InterestManagementConfig{}, false
 }
 
+// objectConfig returns the interest config for an object when one is registered.
 func (state interestState) objectConfig(objectType, objectID string) (InterestManagementConfig, bool) {
 	key := interestObjectKey(objectType, objectID)
 	if config, ok := state.players[key]; ok {
@@ -239,6 +258,7 @@ func (state interestState) objectConfig(objectType, objectID string) (InterestMa
 	return InterestManagementConfig{}, false
 }
 
+// normalizeInterestConfig validates and canonicalizes an interest config.
 func normalizeInterestConfig(config InterestManagementConfig) (InterestManagementConfig, bool) {
 	config.ObjectType = normalizeObjectKey(config.ObjectType)
 	config.ObjectID = normalizeObjectKey(config.ObjectID)
@@ -264,6 +284,7 @@ func normalizeInterestConfig(config InterestManagementConfig) (InterestManagemen
 	return config, true
 }
 
+// objectInterestConfig builds a config from an object's identity.
 func objectInterestConfig(subject InterestSubject, object Object, xField, yField, zField string) InterestManagementConfig {
 	config := InterestManagementConfig{
 		SubjectType: subject,
@@ -281,10 +302,12 @@ func objectInterestConfig(subject InterestSubject, object Object, xField, yField
 	return config
 }
 
+// interestObjectKey returns the map key for an object identity.
 func interestObjectKey(objectType, objectID string) string {
 	return normalizeObjectKey(objectType) + "/" + normalizeObjectKey(objectID)
 }
 
+// snapshotNumber extracts a numeric field from map or struct snapshots.
 func snapshotNumber(snapshot any, fieldName string) (float64, bool) {
 	fieldName = strings.TrimSpace(fieldName)
 	if fieldName == "" {
@@ -306,6 +329,7 @@ func snapshotNumber(snapshot any, fieldName string) (float64, bool) {
 	}
 }
 
+// mapNumber finds a numeric value in a string-keyed map.
 func mapNumber(value reflect.Value, fieldName string) (float64, bool) {
 	if value.Type().Key().Kind() != reflect.String {
 		return 0, false
@@ -323,6 +347,7 @@ func mapNumber(value reflect.Value, fieldName string) (float64, bool) {
 	return 0, false
 }
 
+// structNumber finds a numeric exported field by Go name or JSON tag.
 func structNumber(value reflect.Value, fieldName string) (float64, bool) {
 	valueType := value.Type()
 	for i := 0; i < value.NumField(); i++ {
@@ -339,6 +364,7 @@ func structNumber(value reflect.Value, fieldName string) (float64, bool) {
 	return 0, false
 }
 
+// matchesSnapshotField reports whether field matches a configured snapshot field name.
 func matchesSnapshotField(field reflect.StructField, fieldName string) bool {
 	if field.Name == fieldName || strings.EqualFold(field.Name, fieldName) {
 		return true
@@ -352,6 +378,7 @@ func matchesSnapshotField(field reflect.StructField, fieldName string) bool {
 	return jsonName == fieldName || strings.EqualFold(jsonName, fieldName)
 }
 
+// numberValue converts common numeric snapshot values to float64.
 func numberValue(value reflect.Value) (float64, bool) {
 	value = indirectValue(value)
 	if !value.IsValid() {
@@ -379,6 +406,7 @@ func numberValue(value reflect.Value) (float64, bool) {
 	}
 }
 
+// indirectValue unwraps interfaces and pointers until it reaches a concrete value.
 func indirectValue(value reflect.Value) reflect.Value {
 	for value.IsValid() && (value.Kind() == reflect.Interface || value.Kind() == reflect.Pointer) {
 		if value.IsNil() {

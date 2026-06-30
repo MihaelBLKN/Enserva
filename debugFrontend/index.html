@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Enserva Debug</title>
+  <link rel="stylesheet" href="index.css">
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div class="topbar">
+        <div class="brand">
+          <div>
+            <h1>Enserva Debug</h1>
+            <div id="subline" class="subline">Waiting for state</div>
+          </div>
+        </div>
+        <div class="toolbar">
+          <div class="status-pill"><span id="statusDot" class="status-dot"></span><span id="statusText">Connecting</span></div>
+          <label class="control"><input id="autoRefresh" type="checkbox" checked> Auto</label>
+          <label class="select-wrap">Rate
+            <select id="refreshRate">
+              <option value="500">0.5s</option>
+              <option value="1000" selected>1s</option>
+              <option value="2000">2s</option>
+              <option value="5000">5s</option>
+            </select>
+          </label>
+          <button id="refreshButton" type="button">Refresh</button>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <div id="metrics" class="metrics"></div>
+      <div class="layout">
+        <div class="stack">
+          <section>
+            <div class="section-head">
+              <h2>Runtime</h2>
+              <span id="runtimeBadge" class="chip">tick 0</span>
+            </div>
+            <div id="runtimePanel" class="section-body"></div>
+          </section>
+
+          <section>
+            <div class="section-head">
+              <h2>Config</h2>
+              <span id="configBadge" class="chip">normalized</span>
+            </div>
+            <div id="configPanel" class="section-body"></div>
+          </section>
+        </div>
+
+        <section>
+          <div class="section-head">
+            <h2>Objects</h2>
+            <span id="objectBadge" class="chip">0 objects</span>
+          </div>
+          <div class="search-row">
+            <label class="search"><input id="objectSearch" type="search" placeholder="Filter objects"></label>
+            <label class="select-wrap">View
+              <select id="visibilityFilter">
+                <option value="all" selected>All</option>
+                <option value="visible">Visible</option>
+                <option value="hidden">Hidden</option>
+              </select>
+            </label>
+          </div>
+          <div id="objectsPanel" class="objects"></div>
+        </section>
+
+        <div class="stack">
+          <section>
+            <div class="section-head">
+              <h2>UDP</h2>
+              <span id="udpBadge" class="chip">not started</span>
+            </div>
+            <div id="udpPanel" class="section-body"></div>
+          </section>
+
+          <section>
+            <div class="section-head">
+              <h2>Features</h2>
+              <span id="featuresBadge" class="chip">interest</span>
+            </div>
+            <div id="featuresPanel" class="section-body"></div>
+          </section>
+
+          <section>
+            <div class="section-head">
+              <h2>Raw State</h2>
+              <span id="rawBadge" class="chip">json</span>
+            </div>
+            <details class="raw">
+              <summary>JSON</summary>
+              <pre id="rawPanel" class="json"></pre>
+            </details>
+          </section>
+        </div>
+      </div>
+    </main>
+  </div>
+  <script src="index.js"></script>
+</body>
+</html>

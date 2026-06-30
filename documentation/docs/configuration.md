@@ -17,6 +17,8 @@ Enserva does not define environment-variable or file-based configuration.
 | `TickRate`      | `int`           | `128`             | Number of simulation ticks per second.                 |
 | `SnapshotRate`  | `int`           | `20`              | Number of snapshot broadcasts per second.              |
 | `ClientTimeout` | `time.Duration` | `5 * time.Second` | Duration after which inactive UDP clients are removed. |
+| `DebugEnabled`  | `bool`          | `false`           | Starts the browser debug UI when the server starts.    |
+| `DebugAddress`  | `string`        | `":9100"`         | Address passed to the debug HTTP listener.             |
 
 Use `network.DefaultConfig()` for defaults:
 
@@ -40,6 +42,7 @@ server := network.NewServer(config)
 | `SnapshotRate <= 0`       | Uses `20`.                             |
 | `SnapshotRate > TickRate` | Clamps snapshot rate to the tick rate. |
 | `ClientTimeout <= 0`      | Uses `5s`.                             |
+| Empty `DebugAddress`      | Uses `":9100"`.                        |
 
 !!! tip
 `NewServer` and `NewRuntime` both normalize the config before storing it.
@@ -71,10 +74,20 @@ The root `main.go` exposes these flags:
 | `-snapshotRate`   | `int`      | `20`    | Snapshot broadcasts per second.             |
 | `-clientTimeout`  | `duration` | `5s`    | UDP client timeout.                         |
 | `-exampleObjects` | `bool`     | `true`  | Register the sample `netObjects` package.   |
+| `-debug`          | `bool`     | `false` | Serve the browser debug interface.          |
+| `-debugAddr`      | `string`   | `:9100` | Debug interface HTTP address.               |
 
 ```bash
 go run . -udpPort 9100 -tickRate 60 -snapshotRate 10 -clientTimeout 10s
 ```
+
+Launch the browser debug interface while the UDP server runs:
+
+```bash
+go run . -debug
+```
+
+The default debug URL is `http://localhost:9100`. The interface polls `/debug/state` and displays normalized config, runtime ticks, registered factories, authentication state, interest-management data, UDP clients, transport counters, and all registered object snapshots including objects hidden from normal client snapshots.
 
 ## UDP Request Messages
 

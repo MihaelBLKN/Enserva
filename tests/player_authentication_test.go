@@ -8,6 +8,7 @@ import (
 	"testing"
 )
 
+// TestPlayerAuthenticatorCreatesOwnedPlayer verifies authentication creates a player owned by the client.
 func TestPlayerAuthenticatorCreatesOwnedPlayer(t *testing.T) {
 	server := network.NewServer(network.Config{})
 	authenticator := netobjects.NewPlayerAuthenticator("default")
