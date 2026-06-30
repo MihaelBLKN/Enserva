@@ -369,62 +369,147 @@ func (runtime *Runtime) SnapshotForClient(clientID string) SnapshotData {
 		return snapshotFromObjects(objects)
 	}
 
-	playerPosition, ok := runtime.interestPositionForObject(objects, playerConfig)
+	interestObjects, playerIndex, ok := interestSnapshotObjects(objects, interest, playerConfig)
 	if !ok {
 		return snapshotFromObjects(objects)
 	}
 
+	playerPosition := interestObjects[playerIndex].position
+	visibleInterestObjects := visibleInterestObjectKeys(interestObjects, playerConfig, playerPosition)
 	snapshot := SnapshotData{}
-	for _, object := range objects {
-		if visibility, ok := object.(SnapshotVisibility); ok && !visibility.SnapshotVisible() {
+	for _, object := range interestObjects {
+		if !object.visible {
 			continue
 		}
 
+		if object.managed {
+			if _, ok := visibleInterestObjects[object.key]; !ok {
+				continue
+			}
+		}
+
+		addSnapshotObject(snapshot, object.objectType, object.objectID, object.snapshot)
+	}
+
+	return snapshot
+}
+
+// interestSnapshotObjects snapshots objects once and attaches interest metadata.
+func interestSnapshotObjects(objects []Object, state interestState, playerConfig InterestManagementConfig) ([]interestSnapshotObject, int, bool) {
+	interestObjects := make([]interestSnapshotObject, 0, len(objects))
+	playerIndex := -1
+
+	for _, object := range objects {
 		objectType, objectID, err := objectIdentity(object)
 		if err != nil {
 			continue
 		}
 
 		objectSnapshot := object.Snapshot()
-		if config, ok := interest.objectConfig(objectType, objectID); ok {
-			isSelf := objectType == playerConfig.ObjectType && objectID == playerConfig.ObjectID
-			if isSelf && !config.IncludeSelf {
-				continue
-			}
+		interestObject := interestSnapshotObject{
+			objectType: objectType,
+			objectID:   objectID,
+			key:        interestObjectKey(objectType, objectID),
+			snapshot:   objectSnapshot,
+			visible:    true,
+		}
+		if visibility, ok := object.(SnapshotVisibility); ok && !visibility.SnapshotVisible() {
+			interestObject.visible = false
+		}
 
-			radius := playerConfig.Radius
-			if radius <= 0 {
-				radius = config.Radius
+		if config, ok := state.objectConfig(objectType, objectID); ok {
+			interestObject.managed = true
+			interestObject.config = config
+			if position, ok := extractPosition(objectSnapshot, config); ok {
+				interestObject.position = position
+				interestObject.hasPosition = true
 			}
-			if !isSelf && radius > 0 {
-				objectPosition, ok := extractPosition(objectSnapshot, config)
-				if ok && !withinInterestRadius(playerPosition, objectPosition, radius) {
-					continue
+		}
+
+		if objectType == playerConfig.ObjectType && objectID == playerConfig.ObjectID {
+			if !interestObject.hasPosition {
+				if position, ok := extractPosition(objectSnapshot, playerConfig); ok {
+					interestObject.position = position
+					interestObject.hasPosition = true
 				}
 			}
+			playerIndex = len(interestObjects)
 		}
 
-		addSnapshotObject(snapshot, objectType, objectID, objectSnapshot)
+		interestObjects = append(interestObjects, interestObject)
 	}
 
-	return snapshot
+	if playerIndex < 0 || !interestObjects[playerIndex].hasPosition {
+		return nil, -1, false
+	}
+
+	return interestObjects, playerIndex, true
 }
 
-// interestPositionForObject returns the configured position for an object in objects.
-func (runtime *Runtime) interestPositionForObject(objects []Object, config InterestManagementConfig) (interestPosition, bool) {
-	for _, object := range objects {
-		objectType, objectID, err := objectIdentity(object)
-		if err != nil {
-			continue
-		}
-		if objectType != config.ObjectType || objectID != config.ObjectID {
-			continue
-		}
-
-		return extractPosition(object.Snapshot(), config)
+// visibleInterestObjectKeys returns managed objects visible to the player using a spatial hash.
+func visibleInterestObjectKeys(objects []interestSnapshotObject, playerConfig InterestManagementConfig, playerPosition interestPosition) map[string]struct{} {
+	if !finiteInterestPosition(playerPosition) {
+		return visibleInterestObjectKeysLinear(objects, playerConfig, playerPosition)
 	}
 
-	return interestPosition{}, false
+	visible := map[string]struct{}{}
+	queryRadius := interestSpatialQueryRadius(objects, playerConfig)
+	spatialHash := newInterestSpatialHash(queryRadius)
+	for index := range objects {
+		object := objects[index]
+		if !object.visible || !object.managed {
+			continue
+		}
+
+		if object.objectType == playerConfig.ObjectType && object.objectID == playerConfig.ObjectID {
+			if object.config.IncludeSelf {
+				visible[object.key] = struct{}{}
+			}
+			continue
+		}
+
+		radius := effectiveInterestRadius(playerConfig, object.config)
+		if !filtersByInterestRadius(radius) || !object.hasPosition {
+			visible[object.key] = struct{}{}
+			continue
+		}
+
+		spatialHash.insert(object.position, index)
+	}
+
+	for _, index := range spatialHash.query(playerPosition, queryRadius) {
+		object := objects[index]
+		radius := effectiveInterestRadius(playerConfig, object.config)
+		if withinInterestRadius(playerPosition, object.position, radius) {
+			visible[object.key] = struct{}{}
+		}
+	}
+
+	return visible
+}
+
+// visibleInterestObjectKeysLinear preserves behavior for coordinates the grid cannot index.
+func visibleInterestObjectKeysLinear(objects []interestSnapshotObject, playerConfig InterestManagementConfig, playerPosition interestPosition) map[string]struct{} {
+	visible := map[string]struct{}{}
+	for _, object := range objects {
+		if !object.visible || !object.managed {
+			continue
+		}
+
+		isSelf := object.objectType == playerConfig.ObjectType && object.objectID == playerConfig.ObjectID
+		if isSelf && !object.config.IncludeSelf {
+			continue
+		}
+
+		radius := effectiveInterestRadius(playerConfig, object.config)
+		if !isSelf && filtersByInterestRadius(radius) && object.hasPosition && !withinInterestRadius(playerPosition, object.position, radius) {
+			continue
+		}
+
+		visible[object.key] = struct{}{}
+	}
+
+	return visible
 }
 
 // snapshotFromObjects builds a snapshot from visible objects.

@@ -2,7 +2,7 @@
 
 Interest management lets Enserva send each player a smaller snapshot by including only spatial objects that are relevant to that player.
 
-Without interest management, every authenticated client receives the same visible snapshot. With interest management enabled, the UDP server asks the runtime for a snapshot for each client, and the runtime filters registered spatial objects by distance from that client's player object.
+Without interest management, every authenticated client receives the same visible snapshot. With interest management enabled, the UDP server asks the runtime for a snapshot for each client, and the runtime uses a spatial hash to find registered spatial objects near that client's player object.
 
 ## How It Works
 
@@ -58,7 +58,7 @@ func (tree *Tree) OnInit(ctx network.InitContext) {
 }
 ```
 
-Distance checks use X/Y only for 2D registrations and X/Y/Z for 3D registrations.
+Spatial hash lookups use X/Y cells, then exact distance checks use X/Y only for 2D registrations and X/Y/Z for 3D registrations.
 
 ## Field Names
 
@@ -97,8 +97,8 @@ When UDP snapshots are broadcast:
 1. The server collects authenticated snapshot clients.
 2. For each client, the runtime finds the registered `InterestPlayer` whose object ID matches the client ID.
 3. The runtime extracts that player's position from its snapshot.
-4. Registered interest objects are compared against the player's radius.
-5. Nearby registered objects are included.
+4. Registered interest objects are placed into a spatial hash.
+5. Nearby spatial hash cells are queried using the player's radius.
 6. Far registered objects are filtered out.
 7. Unregistered object types remain visible by default.
 8. Objects with `SnapshotVisible() false` are always excluded.
@@ -135,6 +135,6 @@ ctx.Runtime().Features().EnableInterestManagement(network.InterestManagementConf
 })
 ```
 
-## Current Limitations
+## Spatial Hash Behavior
 
-Interest management currently uses a simple distance check over registered objects. It does not yet build a spatial index, grid, quadtree, or area-of-interest cache. That keeps the feature straightforward, but very large worlds may eventually need a more specialized broad-phase.
+The spatial hash is rebuilt from the current snapshot data when a client snapshot is generated. It acts as a broad phase, so objects in nearby cells are still checked against the configured radius before they are included. This keeps circular and spherical interest boundaries exact while avoiding a full radius comparison against every registered spatial object.

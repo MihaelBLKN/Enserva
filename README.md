@@ -12,7 +12,7 @@ The core idea is simple: your server owns the world. You define objects such as 
 - UDP transport with request sequencing, client tracking, authentication gating, and JSON messages.
 - Server-side object factories for controlled object creation.
 - Snapshot broadcasting grouped by object type and object ID.
-- Per-client interest management for filtering snapshot objects by distance.
+- Per-client interest management for filtering snapshot objects with a spatial hash.
 - Optional browser debug UI for runtime state, config, UDP clients, features, and object snapshots.
 - Example `Player`, `Building`, and authentication objects.
 

@@ -2,6 +2,7 @@ package network
 
 import (
 	"encoding/json"
+	"math"
 	"reflect"
 	"strconv"
 	"strings"
@@ -71,6 +72,28 @@ type interestPosition struct {
 	Y    float64
 	Z    float64
 	HasZ bool
+}
+
+type interestSnapshotObject struct {
+	objectType  string
+	objectID    string
+	key         string
+	snapshot    any
+	visible     bool
+	managed     bool
+	config      InterestManagementConfig
+	position    interestPosition
+	hasPosition bool
+}
+
+type interestSpatialCell struct {
+	x int
+	y int
+}
+
+type interestSpatialHash struct {
+	cellSize float64
+	cells    map[interestSpatialCell][]int
 }
 
 // InterestManagement returns the manager, creating it when features is non-nil.
@@ -185,6 +208,101 @@ func withinInterestRadius(a, b interestPosition, radius float64) bool {
 	}
 
 	return (dx*dx + dy*dy) <= (radius * radius)
+}
+
+// newInterestSpatialHash creates a grid index for interest broad-phase lookups.
+func newInterestSpatialHash(cellSize float64) interestSpatialHash {
+	if cellSize <= 0 || math.IsNaN(cellSize) || math.IsInf(cellSize, 0) {
+		return interestSpatialHash{}
+	}
+
+	return interestSpatialHash{
+		cellSize: cellSize,
+		cells:    map[interestSpatialCell][]int{},
+	}
+}
+
+// insert adds one indexed object position to the spatial hash.
+func (hash interestSpatialHash) insert(position interestPosition, index int) {
+	if hash.cellSize <= 0 || hash.cells == nil || !finiteInterestPosition(position) {
+		return
+	}
+
+	cell := hash.cellFor(position.X, position.Y)
+	hash.cells[cell] = append(hash.cells[cell], index)
+}
+
+// query returns object indexes from cells intersecting radius around position.
+func (hash interestSpatialHash) query(position interestPosition, radius float64) []int {
+	if hash.cellSize <= 0 || len(hash.cells) == 0 || radius <= 0 || math.IsNaN(radius) || math.IsInf(radius, 0) || !finiteInterestPosition(position) {
+		return nil
+	}
+
+	minCell := hash.cellFor(position.X-radius, position.Y-radius)
+	maxCell := hash.cellFor(position.X+radius, position.Y+radius)
+	indexes := make([]int, 0)
+	for y := minCell.y; y <= maxCell.y; y++ {
+		for x := minCell.x; x <= maxCell.x; x++ {
+			indexes = append(indexes, hash.cells[interestSpatialCell{x: x, y: y}]...)
+		}
+	}
+
+	return indexes
+}
+
+// cellFor maps a world position to its spatial hash cell.
+func (hash interestSpatialHash) cellFor(x, y float64) interestSpatialCell {
+	return interestSpatialCell{
+		x: int(math.Floor(x / hash.cellSize)),
+		y: int(math.Floor(y / hash.cellSize)),
+	}
+}
+
+// finiteInterestPosition reports whether position can be indexed in the spatial hash.
+func finiteInterestPosition(position interestPosition) bool {
+	if math.IsNaN(position.X) || math.IsNaN(position.Y) || math.IsInf(position.X, 0) || math.IsInf(position.Y, 0) {
+		return false
+	}
+	if !position.HasZ {
+		return true
+	}
+
+	return !math.IsNaN(position.Z) && !math.IsInf(position.Z, 0)
+}
+
+// effectiveInterestRadius returns the radius used to compare objectConfig to the player.
+func effectiveInterestRadius(playerConfig, objectConfig InterestManagementConfig) float64 {
+	radius := playerConfig.Radius
+	if radius <= 0 {
+		radius = objectConfig.Radius
+	}
+
+	return radius
+}
+
+// filtersByInterestRadius reports whether radius should spatially filter an object.
+func filtersByInterestRadius(radius float64) bool {
+	return radius > 0 && !math.IsNaN(radius) && !math.IsInf(radius, 0)
+}
+
+// interestSpatialQueryRadius returns the largest radius needed for a spatial lookup.
+func interestSpatialQueryRadius(entries []interestSnapshotObject, playerConfig InterestManagementConfig) float64 {
+	if filtersByInterestRadius(playerConfig.Radius) {
+		return playerConfig.Radius
+	}
+
+	radius := 0.0
+	for _, entry := range entries {
+		if !entry.visible || !entry.managed {
+			continue
+		}
+		entryRadius := effectiveInterestRadius(playerConfig, entry.config)
+		if filtersByInterestRadius(entryRadius) && entryRadius > radius {
+			radius = entryRadius
+		}
+	}
+
+	return radius
 }
 
 type interestState struct {

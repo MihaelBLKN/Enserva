@@ -137,7 +137,7 @@ func TestSnapshotForClientReturnsFullSnapshotWhenInterestDisabled(t *testing.T) 
 	}
 }
 
-// TestSnapshotForClientFiltersManagedObjectsByPlayerInterest verifies distance-based interest filtering.
+// TestSnapshotForClientFiltersManagedObjectsByPlayerInterest verifies spatial interest filtering.
 func TestSnapshotForClientFiltersManagedObjectsByPlayerInterest(t *testing.T) {
 	runtime := network.NewRuntime(network.Config{})
 	mustRegisterInterestObject(t, runtime, &interestTestObject{
@@ -190,6 +190,40 @@ func TestSnapshotForClientFiltersManagedObjectsByPlayerInterest(t *testing.T) {
 	}
 	if !hasSnapshotObject(snapshot, "unmanaged", "global") {
 		t.Fatalf("expected unmanaged object to stay globally visible: %#v", snapshot)
+	}
+}
+
+// TestSnapshotForClientUsesObjectRadiusWhenPlayerRadiusIsZero verifies per-object radius fallback.
+func TestSnapshotForClientUsesObjectRadiusWhenPlayerRadiusIsZero(t *testing.T) {
+	runtime := network.NewRuntime(network.Config{})
+	mustRegisterInterestObject(t, runtime, &interestTestObject{
+		objectType:  "player",
+		id:          "player-1",
+		subject:     network.InterestPlayer,
+		includeSelf: true,
+	})
+	mustRegisterInterestObject(t, runtime, &interestTestObject{
+		objectType: "pickup",
+		id:         "near",
+		subject:    network.InterestGameObject,
+		x:          -4,
+		radius:     5,
+	})
+	mustRegisterInterestObject(t, runtime, &interestTestObject{
+		objectType: "pickup",
+		id:         "far",
+		subject:    network.InterestGameObject,
+		x:          6,
+		radius:     5,
+	})
+
+	snapshot := runtime.SnapshotForClient("player-1")
+
+	if !hasSnapshotObject(snapshot, "pickup", "near") {
+		t.Fatalf("expected nearby object with fallback radius in snapshot: %#v", snapshot)
+	}
+	if hasSnapshotObject(snapshot, "pickup", "far") {
+		t.Fatalf("expected far object with fallback radius to be filtered: %#v", snapshot)
 	}
 }
 
