@@ -1,67 +1,111 @@
-# Enserva
+---
+hide:
+  - navigation
+  - toc
+---
 
-Enserva is a small Go networking API for tick-based multiplayer and server simulations. It provides an authoritative runtime, a UDP transport, and a lightweight object model that lets server code decide which objects exist and how clients may interact with them.
+<div class="ev-hero" markdown>
+<div class="ev-hero-inner" markdown>
 
-!!! warning "Project status"
-Enserva is still an early project. Treat the documented APIs as a guide to the present release, not a long-term compatibility promise.
+<span class="ev-eyebrow"><span class="dot"></span> Early development build v1.0</span>
+
+# A Go game server for authoritative multiplayer.
+
+<p class="ev-sub">Enserva is a fully fledged game server runtime written in Go. It combines an authoritative tick loop, UDP transport, server-owned objects, scene-aware snapshots, interest management, and a local debug UI so multiplayer games can keep simulation and replication under server control.</p>
+
+<div class="ev-actions">
+  <a href="installation/" class="ev-btn ev-btn-primary">Get Started -></a>
+  <a href="https://github.com/MihaelBLKN/Enserva" class="ev-btn ev-btn-secondary">View on GitHub</a>
+</div>
+
+</div>
+</div>
+
+<div class="ev-stats" markdown>
+<div markdown>
+<div class="ev-stat-num">UDP</div>
+<div class="ev-stat-label">Low-level transport</div>
+</div>
+<div markdown>
+<div class="ev-stat-num">Tick</div>
+<div class="ev-stat-label">Server simulation</div>
+</div>
+<div markdown>
+<div class="ev-stat-num">Scenes</div>
+<div class="ev-stat-label">Server-owned worlds</div>
+</div>
+<div markdown>
+<div class="ev-stat-num">Go</div>
+<div class="ev-stat-label">Dependency-light runtime</div>
+</div>
+</div>
+
+Enserva is built for authoritative multiplayer servers where the backend owns object lifetime, routing, visibility, scenes, and snapshot delivery. The networking layer is part of the server rather than the whole product: game code plugs into a Go runtime that already knows how to tick, receive client requests, filter snapshots, and expose development state.
+
+!!! warning "Early project notice"
+    Do not use Enserva for real-world production game servers unless you are fully willing and able to absorb large breaking changes.
+
+    Enserva is still in a very early stage. You should expect:
+
+    - Bugs in core networking, runtime, and replication features.
+    - Updates that remove or redesign existing APIs and behavior.
+    - Changes in protocol details, especially around wire packets, snapshots, authentication, and object routing.
+    - Changing advice on coding conventions, message schemas, and how to structure server projects.
+
+    This is not a bad thing. Moving quickly at this stage lets Enserva abandon weak ideas, simplify counterproductive abstractions, and find stronger foundations for authoritative multiplayer servers.
+
+    Do not be discouraged from experimenting with Enserva. It is a good time to follow development, try the runtime in prototypes, and help shape the API. More stable, long-term versions will come once the project has had time to settle.
 
 ## Features
 
-- Authoritative server-side object registry.
-- Tick loop with per-tick and full-second hooks.
-- UDP request routing to existing objects with JSON and binary packet support.
-- Snapshot broadcasting with per-object visibility controls.
-- Per-client interest management for snapshot filtering.
-- Optional object-based authentication flow.
-- Server-side object factories for controlled creation.
-- Browser debug UI for runtime, transport, feature, and object state.
-- Example `player`, `building`, and authenticator objects.
+<div class="ev-grid" markdown>
 
-## Quick Installation
+<div class="ev-card" markdown>
+<div class="ev-card-icon">01</div>
+#### Authoritative game state
+The server owns object lifetime, request routing, scene membership, and replication decisions.
+</div>
 
-```bash
-git clone https://github.com/MihaelBLKN/Enserva.git
-cd Enserva
-go test ./...
-go run .
-```
+<div class="ev-card" markdown>
+<div class="ev-card-icon">02</div>
+#### Go simulation loop
+Per-tick and full-second hooks give game systems predictable timing inside a Go server process.
+</div>
 
-The example host starts a UDP server on port `9000` by default.
+<div class="ev-card" markdown>
+<div class="ev-card-icon">03</div>
+#### UDP transport
+Binary packets are the primary client path, with legacy JSON compatibility kept for tools and debugging.
+</div>
 
-## Quick Example
+<div class="ev-card" markdown>
+<div class="ev-card-icon">04</div>
+#### Snapshot replication
+The runtime builds per-client snapshots and keeps replicated state scoped to what each client should see.
+</div>
 
-```go
-package main
+<div class="ev-card" markdown>
+<div class="ev-card-icon">05</div>
+#### Interest management
+Per-client interest filtering trims snapshot payloads to nearby or relevant objects.
+</div>
 
-import (
-	"log"
+<div class="ev-card" markdown>
+<div class="ev-card-icon">06</div>
+#### Scene management
+Server-owned scene membership supports rooms, maps, shards, scene switches, and scene-filtered snapshots.
+</div>
 
-	netobjects "Enserva/netObjects"
-	"Enserva/network"
-)
+<div class="ev-card" markdown>
+<div class="ev-card-icon">07</div>
+#### Object-based auth
+An optional authentication flow lives inside the object model instead of a separate side channel, with one registered authority for mapping connections to player identities.
+</div>
 
-func main() {
-	server := network.NewServer(network.DefaultConfig())
+<div class="ev-card" markdown>
+<div class="ev-card-icon">08</div>
+#### Debug UI
+A browser debug UI exposes runtime, transport, feature, object, and scene state for local development.
+</div>
 
-	if err := netobjects.Register(server); err != nil {
-		log.Fatal(err)
-	}
-
-	log.Fatal(server.ListenAndServe())
-}
-```
-
-## Documentation Map
-
-| Section                           | Purpose                                                                   |
-| --------------------------------- | ------------------------------------------------------------------------- |
-| [Installation](installation.md)   | Toolchain, clone, build, test, and local docs setup.                      |
-| [Quick Start](quick-start.md)     | Start the included host and send a first UDP message.                     |
-| [Features](features/interest-management.md) | Feature guides, including interest management.                            |
-| [Configuration](configuration.md) | Runtime config, CLI flags, UDP messages, and supported options.           |
-| [Architecture](architecture.md)   | Runtime layout, request flow, snapshots, wire packets, and concurrency.   |
-| [Developer API](developer-api.md) | Public package overview and links to detailed package references.         |
-| [Wire Protocol](api/wire-protocol.md) | Binary UDP packet format, built-in message IDs, and custom game messages. |
-| [Examples](examples.md)           | Tutorials built from the README, tests, and sample objects.               |
-| [FAQ](faq.md)                     | Common usage and design questions.                                        |
-| [Changelog](changelog.md)         | Release notes and project history.                                        |
+</div>

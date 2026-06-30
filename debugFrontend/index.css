@@ -1,18 +1,19 @@
 :root {
-  color-scheme: light;
-  --bg: #f5f7fa;
-  --panel: #ffffff;
-  --panel-2: #eef3f8;
-  --text: #16202a;
-  --muted: #5e6b79;
-  --line: #d9e1ea;
-  --line-strong: #bcc9d6;
-  --blue: #1c6dd0;
-  --teal: #0a7f72;
-  --amber: #a46100;
-  --red: #b42318;
-  --green: #17813a;
-  --shadow: 0 12px 32px rgba(22, 32, 42, 0.08);
+  color-scheme: dark;
+  --bg: #000000;
+  --panel: #0a0d10;
+  --panel-2: #11161c;
+  --panel-3: #151c23;
+  --text: #eef3f8;
+  --muted: #9aa8b6;
+  --line: #202832;
+  --line-strong: #33404d;
+  --blue: #58a6ff;
+  --teal: #56d4c3;
+  --amber: #f2b84b;
+  --red: #ff6b61;
+  --green: #55d47e;
+  --shadow: 0 16px 42px rgba(0, 0, 0, 0.35);
 }
 
 * { box-sizing: border-box; }
@@ -40,7 +41,7 @@ header {
   position: sticky;
   top: 0;
   z-index: 20;
-  background: rgba(245, 247, 250, 0.94);
+  background: rgba(0, 0, 0, 0.9);
   border-bottom: 1px solid var(--line);
   backdrop-filter: blur(10px);
 }
@@ -95,7 +96,7 @@ h1 {
   border-radius: 8px;
   padding: 6px 10px;
   color: var(--muted);
-  box-shadow: 0 1px 2px rgba(22, 32, 42, 0.04);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 
 .status-dot {
@@ -121,18 +122,24 @@ select, input[type="search"] {
   color: var(--text);
 }
 
+select option {
+  background: var(--panel);
+  color: var(--text);
+}
+
 button {
   min-height: 34px;
   border: 1px solid var(--line-strong);
-  background: #16202a;
-  color: #fff;
+  background: var(--panel-3);
+  color: var(--text);
   border-radius: 8px;
   padding: 7px 11px;
   cursor: pointer;
 }
 
 button:hover {
-  background: #243342;
+  background: #1d2731;
+  border-color: var(--blue);
 }
 
 main {
@@ -143,7 +150,7 @@ main {
 
 .metrics {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 12px;
   margin-bottom: 14px;
 }
@@ -222,6 +229,12 @@ h2, h3 {
 
 .section-body {
   padding: 14px;
+}
+
+.subsection {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
 }
 
 .muted {
@@ -303,21 +316,21 @@ h2, h3 {
 }
 
 .chip.good {
-  background: #e7f6ed;
+  background: rgba(85, 212, 126, 0.12);
   color: var(--green);
-  border-color: #bce2ca;
+  border-color: rgba(85, 212, 126, 0.35);
 }
 
 .chip.warn {
-  background: #fff3dc;
+  background: rgba(242, 184, 75, 0.12);
   color: var(--amber);
-  border-color: #f0d09a;
+  border-color: rgba(242, 184, 75, 0.35);
 }
 
 .chip.bad {
-  background: #fdeceb;
+  background: rgba(255, 107, 97, 0.12);
   color: var(--red);
-  border-color: #f3c1bd;
+  border-color: rgba(255, 107, 97, 0.35);
 }
 
 .objects {
@@ -334,7 +347,7 @@ h2, h3 {
   display: grid;
   gap: 10px;
   padding: 12px;
-  background: #fbfcfe;
+  background: #050608;
 }
 
 .object-card {
@@ -364,7 +377,7 @@ h2, h3 {
   padding: 12px 14px;
   max-height: 460px;
   overflow: auto;
-  background: #101820;
+  background: #050608;
   color: #e8eef5;
   font: 12px/1.55 "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   white-space: pre-wrap;
@@ -415,7 +428,7 @@ h2, h3 {
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 9px 10px;
-  background: #fbfcfe;
+  background: var(--panel-2);
 }
 
 .counter b {

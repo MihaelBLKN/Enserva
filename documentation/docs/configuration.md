@@ -22,14 +22,29 @@ Enserva does not define environment-variable or file-based configuration.
 
 Use `network.DefaultConfig()` for defaults:
 
-```go
-config := network.DefaultConfig()
-config.UDPAddress = ":9100"
-config.TickRate = 60
-config.SnapshotRate = 10
+=== "GoLang"
 
-server := network.NewServer(config)
-```
+    ```go
+    config := network.DefaultConfig()
+    config.UDPAddress = ":9100"
+    config.TickRate = 60
+    config.SnapshotRate = 10
+
+    server := network.NewServer(config)
+    ```
+
+=== "C#"
+
+    ```csharp
+    // Conceptual C# host API shape if you wrap Enserva from another runtime.
+    var config = EnservaConfig.Default();
+    var server = new EnservaServer(config);
+
+    server.RegisterFactory("player", PlayerFactory.Create);
+    server.RegisterAuthenticationObject(new PlayerAuthenticator("default"));
+
+    await server.ListenAndServeAsync();
+    ```
 
 ## Normalization Rules
 
@@ -56,12 +71,27 @@ server := network.NewServer(config)
 
 Example:
 
-```go
-config := network.Config{TickRate: 120, SnapshotRate: 20}.Normalized()
+=== "GoLang"
 
-tickInterval := config.TickInterval() // 8.333333ms
-snapshotEvery := config.SnapshotEvery() // 6
-```
+    ```go
+    config := network.Config{TickRate: 120, SnapshotRate: 20}.Normalized()
+
+    tickInterval := config.TickInterval() // 8.333333ms
+    snapshotEvery := config.SnapshotEvery() // 6
+    ```
+
+=== "C#"
+
+    ```csharp
+    var config = new EnservaConfig
+    {
+        TickRate = 120,
+        SnapshotRate = 20,
+    }.Normalize();
+
+    TimeSpan tickInterval = config.TickInterval;
+    int snapshotEvery = config.SnapshotEvery;
+    ```
 
 ## Example Host Flags
 
@@ -89,9 +119,17 @@ go run . -debug
 
 The default debug URL is `http://localhost:9100`. The interface polls `/debug/state` and displays normalized config, runtime ticks, registered factories, authentication state, interest-management data, UDP clients, transport counters, and all registered object snapshots including objects hidden from normal client snapshots.
 
-## UDP Request Messages
+## UDP Wire Packets
 
-Client requests are JSON UDP datagrams matching `network.RequestMessage`:
+The UDP transport's primary protocol is the binary wire packet format. These buffer-backed packets start with the `ES` magic value and carry one or more registered messages, sender sequence state, acknowledgement fields, and a bounded payload buffer.
+
+The built-in registry includes hello, welcome, ping, pong, error, disconnect, object request, player input, world snapshot, and entity delta message schemas. Register game-specific messages in the `0x1000-0xffff` range for gameplay traffic instead of inventing ad hoc JSON envelopes.
+
+Use this protocol for new clients, multiplayer hot paths, custom gameplay messages, and snapshot handling. See [Wire Protocol](api/wire-protocol.md) for packet layout, message IDs, and registration examples.
+
+## Legacy JSON Request Messages
+
+Legacy clients and tooling may still send JSON UDP datagrams matching `network.RequestMessage`:
 
 | JSON field   | Go field     | Required            | Description                                                                      |
 | ------------ | ------------ | ------------------- | -------------------------------------------------------------------------------- |
@@ -121,9 +159,9 @@ Authentication uses the same request envelope with `type` set to `auth` or `auth
 
 The sample `PlayerAuthenticator` does not inspect credentials. It creates a new player for each authentication attempt. Real applications should replace it with an object that validates credentials before returning an authenticated ID.
 
-## Snapshot Messages
+## Legacy JSON Snapshot Messages
 
-Snapshots match `network.SnapshotMessage`:
+Clients that have not sent wire packets receive snapshots as `network.SnapshotMessage` JSON:
 
 | JSON field | Description                                                |
 | ---------- | ---------------------------------------------------------- |
@@ -134,12 +172,6 @@ Snapshots match `network.SnapshotMessage`:
 | `objects`  | Nested map of object type to object ID to object snapshot. |
 
 Objects can opt out of snapshots by implementing `SnapshotVisible() bool` and returning `false`.
-
-## Binary Wire Protocol
-
-The UDP transport also accepts binary packets that start with the `ES` magic value. Binary packets carry one or more registered wire messages, sender sequence state, and acknowledgement fields. The built-in registry includes hello, welcome, ping, pong, error, disconnect, object request, player input, world snapshot, and entity delta message schemas.
-
-Use the JSON request format for simple clients and tooling. Use the binary protocol for hot-path multiplayer traffic or custom game messages. See [Wire Protocol](api/wire-protocol.md) for packet layout, message IDs, and registration examples.
 
 ## External Configuration
 

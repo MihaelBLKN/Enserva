@@ -33,6 +33,7 @@ type DebugSummary struct {
 	AuthenticatedUDPClient int    `json:"authenticatedUdpClientCount"`
 	AuthenticationRequired bool   `json:"authenticationRequired"`
 	InterestEnabled        bool   `json:"interestEnabled"`
+	ScenesEnabled          bool   `json:"scenesEnabled"`
 }
 
 // DebugConfigState contains normalized configuration values for display.
@@ -97,6 +98,7 @@ type DebugObjectState struct {
 // DebugFeatureState contains optional feature state.
 type DebugFeatureState struct {
 	InterestManagement DebugInterestState `json:"interestManagement"`
+	SceneManagement    DebugSceneState    `json:"sceneManagement"`
 }
 
 // DebugInterestState describes active interest-management registrations.
@@ -120,6 +122,22 @@ type DebugInterestConfig struct {
 	ZField      string  `json:"zField,omitempty"`
 	Radius      float64 `json:"radius"`
 	IncludeSelf bool    `json:"includeSelf"`
+}
+
+// DebugSceneState describes active scene-management registrations.
+type DebugSceneState struct {
+	Configured   bool              `json:"configured"`
+	Enabled      bool              `json:"enabled"`
+	ClientCount  int               `json:"clientCount"`
+	ObjectCount  int               `json:"objectCount"`
+	ClientScenes []DebugSceneEntry `json:"clientScenes"`
+	ObjectScenes []DebugSceneEntry `json:"objectScenes"`
+}
+
+// DebugSceneEntry describes one scene assignment.
+type DebugSceneEntry struct {
+	Key   string  `json:"key"`
+	Scene SceneID `json:"scene"`
 }
 
 // DebugUDPState contains UDP transport state and counters.
@@ -212,6 +230,7 @@ func (server *Server) DebugState() DebugState {
 		AuthenticatedUDPClient: udpState.AuthenticatedClientCount,
 		AuthenticationRequired: runtimeState.Authentication.Required,
 		InterestEnabled:        featureState.InterestManagement.Enabled,
+		ScenesEnabled:          featureState.SceneManagement.Enabled,
 	}
 
 	return state
@@ -260,6 +279,7 @@ func (runtime *Runtime) DebugState() DebugRuntimeState {
 func (features *Features) DebugState() DebugFeatureState {
 	return DebugFeatureState{
 		InterestManagement: features.debugInterestState(),
+		SceneManagement:    features.debugSceneState(),
 	}
 }
 
@@ -479,6 +499,48 @@ func debugInterestConfigs(configs map[string]InterestManagementConfig) []DebugIn
 	return states
 }
 
+// debugSceneState returns a serializable snapshot of scene-management state.
+func (features *Features) debugSceneState() DebugSceneState {
+	if features == nil {
+		return DebugSceneState{}
+	}
+
+	features.mu.RLock()
+	defer features.mu.RUnlock()
+
+	if features.scenes == nil {
+		return DebugSceneState{}
+	}
+
+	return DebugSceneState{
+		Configured:   true,
+		Enabled:      features.scenes.enabled,
+		ClientCount:  len(features.scenes.clients),
+		ObjectCount:  len(features.scenes.objects),
+		ClientScenes: debugSceneEntries(features.scenes.clients),
+		ObjectScenes: debugSceneEntries(features.scenes.objects),
+	}
+}
+
+// debugSceneEntries returns sorted debug state for scene assignments.
+func debugSceneEntries(entries map[string]SceneID) []DebugSceneEntry {
+	keys := make([]string, 0, len(entries))
+	for key := range entries {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	states := make([]DebugSceneEntry, 0, len(keys))
+	for _, key := range keys {
+		states = append(states, DebugSceneEntry{
+			Key:   key,
+			Scene: entries[key],
+		})
+	}
+
+	return states
+}
+
 // debugObjectSnapshot converts an object's snapshot to JSON-compatible data.
 func debugObjectSnapshot(object Object) (snapshot any, snapshotError string) {
 	defer func() {
@@ -543,6 +605,9 @@ func debugCapabilities(object Object) []string {
 	}
 	if _, ok := object.(SnapshotVisibility); ok {
 		capabilities = append(capabilities, "visibility")
+	}
+	if _, ok := object.(SceneSwitchHandler); ok {
+		capabilities = append(capabilities, "sceneSwitch")
 	}
 
 	return capabilities

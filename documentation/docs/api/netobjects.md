@@ -11,13 +11,26 @@ Do not treat the sample `Player`, `Building`, or `PlayerAuthenticator` behavior 
 
 Every object registered with Enserva must implement `network.Object`:
 
-```go
-type Object interface {
-	ObjectType() string
-	ObjectID() string
-	Snapshot() any
-}
-```
+=== "GoLang"
+
+    ```go
+    type Object interface {
+    	ObjectType() string
+    	ObjectID() string
+    	Snapshot() any
+    }
+    ```
+
+=== "C#"
+
+    ```csharp
+    public interface IEnservaObject
+    {
+        string ObjectType { get; }
+        string ObjectId { get; }
+        object Snapshot();
+    }
+    ```
 
 | Method                | Purpose                                                                                                 |
 | --------------------- | ------------------------------------------------------------------------------------------------------- |
@@ -37,8 +50,9 @@ Objects can implement any of these methods. Enserva detects them through interfa
 | `OnTick(network.TickContext)`                                            | `network.TickHandler`           | Every simulation tick after the runtime increments `Tick`.                                               |
 | `OnFullTick(network.TickContext)`                                        | `network.FullTickHandler`       | Once per completed second of ticks, using `tick % TickRate == 0`.                                        |
 | `OnRequest(network.RequestContext) error`                                | `network.RequestHandler`        | When a request targets an existing object with matching `objectType` and `objectId`.                     |
-| `OnAuthenticationAttempt(network.AuthenticationContext) (string, error)` | `network.AuthenticationHandler` | When the transport receives an auth message and this object was registered as the authentication object. |
+| `OnAuthenticationAttempt(network.AuthenticationContext) (string, error)` | `network.AuthenticationHandler` | When the transport receives a wire `ClientHello` or legacy JSON auth message and this object was registered as the authentication object. |
 | `SnapshotVisible() bool`                                                 | `network.SnapshotVisibility`    | During snapshot generation. Return `false` for server-only objects.                                      |
+| `OnSceneSwitchRequest(network.SceneSwitchContext) (network.SceneSwitchDecision, error)` | `network.SceneSwitchHandler` | When a standard scene-switch request targets the object.                                                 |
 
 !!! note
 An object can implement only the hooks it needs. For example, a static object may only implement `ObjectType`, `ObjectID`, and `Snapshot`.
@@ -47,29 +61,61 @@ An object can implement only the hooks it needs. For example, a static object ma
 
 Factories are not object methods. They are server-side creation helpers:
 
-```go
-type ObjectFactory interface {
-	CreateObject(network.RequestContext) (network.Object, error)
-}
-```
+=== "GoLang"
+
+    ```go
+    type ObjectFactory interface {
+    	CreateObject(network.RequestContext) (network.Object, error)
+    }
+    ```
+
+=== "C#"
+
+    ```csharp
+    public interface IObjectFactory
+    {
+        IEnservaObject CreateObject(RequestContext context);
+    }
+    ```
 
 Most simple factories use `network.ObjectFactoryFunc`:
 
-```go
-func ProjectileFactory(ctx network.RequestContext) (network.Object, error) {
-	return &Projectile{ID: ctx.Request.ObjectID}, nil
-}
+=== "GoLang"
 
-if err := server.RegisterFactory("projectile", network.ObjectFactoryFunc(ProjectileFactory)); err != nil {
-	return err
-}
-```
+    ```go
+    func ProjectileFactory(ctx network.RequestContext) (network.Object, error) {
+    	return &Projectile{ID: ctx.Request.ObjectID}, nil
+    }
+
+    if err := server.RegisterFactory("projectile", network.ObjectFactoryFunc(ProjectileFactory)); err != nil {
+    	return err
+    }
+    ```
+
+=== "C#"
+
+    ```csharp
+    IEnservaObject ProjectileFactory(RequestContext ctx)
+    {
+        return new Projectile { Id = ctx.Request.ObjectId };
+    }
+
+    server.RegisterFactory("projectile", ProjectileFactory);
+    ```
 
 Client requests do not call factories. To create an object through a factory, server code must call:
 
-```go
-object, err := server.CreateObject("projectile", "projectile-1")
-```
+=== "GoLang"
+
+    ```go
+    object, err := server.CreateObject("projectile", "projectile-1")
+    ```
+
+=== "C#"
+
+    ```csharp
+    IEnservaObject projectile = server.CreateObject("projectile", "projectile-1");
+    ```
 
 ## Registration Methods
 
@@ -86,71 +132,131 @@ Use these `network.Server` or `network.Runtime` methods to make objects availabl
 
 ## Minimal Object Example
 
-```go
-package world
+=== "GoLang"
 
-import "Enserva/network"
+    ```go
+    package world
 
-type Door struct {
-	ID         string `json:"id"`
-	Open       bool   `json:"open"`
-	LastClient string `json:"lastClient,omitempty"`
-}
+    import "Enserva/network"
 
-func (door *Door) ObjectType() string {
-	return "door"
-}
+    type Door struct {
+    	ID         string `json:"id"`
+    	Open       bool   `json:"open"`
+    	LastClient string `json:"lastClient,omitempty"`
+    }
 
-func (door *Door) ObjectID() string {
-	return door.ID
-}
+    func (door *Door) ObjectType() string {
+    	return "door"
+    }
 
-func (door *Door) Snapshot() any {
-	return *door
-}
+    func (door *Door) ObjectID() string {
+    	return door.ID
+    }
 
-func (door *Door) OnRequest(ctx network.RequestContext) error {
-	switch ctx.Request.Action {
-	case "open":
-		door.Open = true
-	case "close":
-		door.Open = false
-	}
+    func (door *Door) Snapshot() any {
+    	return *door
+    }
 
-	door.LastClient = ctx.ClientID
-	return nil
-}
-```
+    func (door *Door) OnRequest(ctx network.RequestContext) error {
+    	switch ctx.Request.Action {
+    	case "open":
+    		door.Open = true
+    	case "close":
+    		door.Open = false
+    	}
+
+    	door.LastClient = ctx.ClientID
+    	return nil
+    }
+    ```
+
+=== "C#"
+
+    ```csharp
+    public sealed class Door : IEnservaObject
+    {
+        public string Id { get; init; } = "";
+        public bool Open { get; private set; }
+        public ulong Uses { get; private set; }
+        public string? Client { get; private set; }
+
+        public string ObjectType => "door";
+        public string ObjectId => Id;
+        public object Snapshot() => this;
+
+        public void OnRequest(RequestContext ctx)
+        {
+            if (ctx.Request.Action == "open") Open = true;
+            if (ctx.Request.Action == "close") Open = false;
+
+            Uses++;
+            Client = ctx.ClientId;
+        }
+    }
+    ```
 
 Register it:
 
-```go
-door := &world.Door{ID: "door-1"}
-if err := server.RegisterObject(door); err != nil {
-	return err
-}
-```
+=== "GoLang"
+
+    ```go
+    door := &world.Door{ID: "door-1"}
+    if err := server.RegisterObject(door); err != nil {
+    	return err
+    }
+    ```
+
+=== "C#"
+
+    ```csharp
+    var door = new Door { Id = "door-1" };
+    server.RegisterObject(door);
+    ```
 
 ## Init Hook Example
 
 Use `OnInit` for setup that needs the runtime after an object is registered. Interest management is a common example:
 
-```go
-func (player *Player) OnInit(ctx network.InitContext) {
-	ctx.Runtime().Features().EnableInterestManagement(
-		network.PlayerInterest2D(player, "x", "y", 500),
-	)
-}
-```
+=== "GoLang"
+
+    ```go
+    func (player *Player) OnInit(ctx network.InitContext) {
+    	ctx.Runtime().Features().EnableInterestManagement(
+    		network.PlayerInterest2D(player, "x", "y", 500),
+    	)
+    }
+    ```
+
+=== "C#"
+
+    ```csharp
+    public void OnInit(InitContext ctx)
+    {
+        ctx.Runtime.Features.EnableInterestManagement(
+            Interest.Player2D(this, "x", "y", radius: 500));
+    }
+    ```
 
 ## Tick Hook Example
 
-```go
-func (projectile *Projectile) OnTick(ctx network.TickContext) {
-	projectile.X += projectile.VelocityX * ctx.DeltaSeconds
-	projectile.Y += projectile.VelocityY * ctx.DeltaSeconds
-}
-```
+=== "GoLang"
+
+    ```go
+    func (projectile *Projectile) OnTick(ctx network.TickContext) {
+    	projectile.X += projectile.VelocityX * ctx.DeltaSeconds
+    	projectile.Y += projectile.VelocityY * ctx.DeltaSeconds
+    }
+    ```
+
+=== "C#"
+
+    ```csharp
+    public void OnTick(TickContext ctx)
+    {
+        X += VelocityX * ctx.DeltaSeconds;
+        Y += VelocityY * ctx.DeltaSeconds;
+    }
+    ```
 
 `TickContext` includes:
 
@@ -166,18 +272,32 @@ func (projectile *Projectile) OnTick(ctx network.TickContext) {
 
 `OnRequest` receives a `network.RequestContext`:
 
-```go
-func (object *Thing) OnRequest(ctx network.RequestContext) error {
-	var payload struct {
-		Value int `json:"value"`
-	}
-	if err := ctx.Decode(&payload); err != nil {
-		return err
-	}
+=== "GoLang"
 
-	return nil
-}
-```
+    ```go
+    func (object *Thing) OnRequest(ctx network.RequestContext) error {
+    	var payload struct {
+    		Value int `json:"value"`
+    	}
+    	if err := ctx.Decode(&payload); err != nil {
+    		return err
+    	}
+
+    	return nil
+    }
+    ```
+
+=== "C#"
+
+    ```csharp
+    public void OnRequest(RequestContext ctx)
+    {
+        var payload = ctx.Decode<ThingRequest>();
+        // Apply server-authoritative changes here.
+    }
+
+    public sealed record ThingRequest(int Value);
+    ```
 
 Useful fields and methods:
 
@@ -187,7 +307,7 @@ Useful fields and methods:
 | `ctx.Request.ObjectType` | Target object type.                                    |
 | `ctx.Request.ObjectID`   | Target object ID.                                      |
 | `ctx.Request.Action`     | Object-defined action name.                            |
-| `ctx.Decode(&target)`    | Decode `ctx.Request.Data` JSON.                        |
+| `ctx.Decode(&target)`    | Decode the typed wire payload or legacy `ctx.Request.Data` JSON. |
 | `ctx.Respond(message)`   | Send a direct response when the transport supports it. |
 | `ctx.Runtime`            | Access the runtime routing the request.                |
 | `ctx.Features`           | Access runtime feature configuration.                  |
@@ -196,31 +316,54 @@ Useful fields and methods:
 
 Authentication is handled by one normal object that implements `OnAuthenticationAttempt`.
 
-```go
-func (auth *Authenticator) OnAuthenticationAttempt(ctx network.AuthenticationContext) (string, error) {
-	var payload struct {
-		Token string `json:"token"`
-	}
-	if err := ctx.Decode(&payload); err != nil {
-		return "", err
-	}
+=== "GoLang"
 
-	accountID, err := authenticateToken(payload.Token)
-	if err != nil {
-		return "", err
-	}
+    ```go
+    func (auth *Authenticator) OnAuthenticationAttempt(ctx network.AuthenticationContext) (string, error) {
+    	var payload struct {
+    		Token string `json:"token"`
+    	}
+    	if err := ctx.Decode(&payload); err != nil {
+    		return "", err
+    	}
 
-	return "player-" + accountID, nil
-}
-```
+    	accountID, err := authenticateToken(payload.Token)
+    	if err != nil {
+    		return "", err
+    	}
+
+    	return "player-" + accountID, nil
+    }
+    ```
+
+=== "C#"
+
+    ```csharp
+    public string OnAuthenticationAttempt(AuthenticationContext ctx)
+    {
+        var payload = ctx.Decode<AuthPayload>();
+        string accountId = AuthenticateToken(payload.Token);
+        return $"player-{accountId}";
+    }
+
+    public sealed record AuthPayload(string Token);
+    ```
 
 Register it:
 
-```go
-if err := server.RegisterAuthenticationObject(authenticator); err != nil {
-	return err
-}
-```
+=== "GoLang"
+
+    ```go
+    if err := server.RegisterAuthenticationObject(authenticator); err != nil {
+    	return err
+    }
+    ```
+
+=== "C#"
+
+    ```csharp
+    server.RegisterAuthenticationObject(new Authenticator { Id = "primary" });
+    ```
 
 Only one authentication object can be registered at a time. If an authentication object exists, unauthenticated UDP clients cannot receive snapshots or send normal object requests.
 
@@ -228,11 +371,19 @@ Only one authentication object can be registered at a time. If an authentication
 
 Implement `SnapshotVisible` when an object should exist in the runtime but not be sent to clients:
 
-```go
-func (auth *Authenticator) SnapshotVisible() bool {
-	return false
-}
-```
+=== "GoLang"
+
+    ```go
+    func (auth *Authenticator) SnapshotVisible() bool {
+    	return false
+    }
+    ```
+
+=== "C#"
+
+    ```csharp
+    public bool SnapshotVisible() => false;
+    ```
 
 This is useful for authentication handlers and other server-only coordination objects.
 
@@ -242,7 +393,7 @@ The repository's `Enserva/netObjects` package includes:
 
 | Example                                  | Demonstrates                                                       |
 | ---------------------------------------- | ------------------------------------------------------------------ |
-| `Player`                                 | An object with request, tick, and full-tick hooks.                 |
+| `Player`                                 | An object with request, scene-switch, tick, and full-tick hooks.   |
 | `Building`                               | An object with init, request, and full-tick hooks.                 |
 | `PlayerAuthenticator`                    | A hidden authentication object that creates a server-owned player. |
 | `Register(server *network.Server) error` | One way to group object/factory registration for an app package.   |

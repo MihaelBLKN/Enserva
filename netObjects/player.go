@@ -10,6 +10,7 @@ import (
 const (
 	defaultPlayerSpeed    = 180.0
 	defaultInterestRadius = 750.0
+	defaultPlayerScene    = network.SceneID("default")
 )
 
 var (
@@ -89,6 +90,8 @@ func (authenticator *PlayerAuthenticator) OnAuthenticationAttempt(ctx network.Au
 	if err := ctx.Runtime.RegisterObject(player); err != nil {
 		return "", err
 	}
+	ctx.Runtime.Features().SetObjectSceneForObject(player, defaultPlayerScene)
+	ctx.Runtime.Features().SetClientScene(playerID, defaultPlayerScene)
 
 	return playerID, nil
 }
@@ -123,6 +126,7 @@ func (player *Player) Snapshot() any {
 
 func (player *Player) OnInit(ctx network.InitContext) {
 	ctx.Runtime().Features().EnableInterestManagement(network.PlayerInterest(player, "x", "y", "z", defaultInterestRadius))
+	ctx.Runtime().Features().SetObjectSceneForObject(player, defaultPlayerScene)
 }
 
 func (player *Player) OnTick(ctx network.TickContext) {
@@ -157,6 +161,14 @@ func (player *Player) OnRequest(ctx network.RequestContext) error {
 	player.Requests++
 	player.LastClient = ctx.ClientID
 	return nil
+}
+
+func (player *Player) OnSceneSwitchRequest(ctx network.SceneSwitchContext) (network.SceneSwitchDecision, error) {
+	if player.OwnerClientID != "" && ctx.ClientID != player.OwnerClientID {
+		return network.SceneSwitchDecision{}, fmt.Errorf("%w: %s", ErrUnauthorizedPlayerClient, ctx.ClientID)
+	}
+
+	return network.SceneSwitchAllowed(), nil
 }
 
 func clamp(value, min, max float64) float64 {

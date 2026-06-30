@@ -127,7 +127,8 @@ func (factory ObjectFactoryFunc) CreateObject(ctx RequestContext) (Object, error
 	return factory(ctx)
 }
 
-// RequestMessage is the JSON request format accepted by transports.
+// RequestMessage is the compatibility request envelope used by legacy JSON
+// datagrams and by wire messages that adapt into object requests.
 type RequestMessage struct {
 	Type       string          `json:"type,omitempty"`
 	Sequence   uint64          `json:"seq,omitempty"`
@@ -229,12 +230,13 @@ type RequestContext struct {
 	ReceivedAt time.Time
 	Request    RequestMessage
 	Payload    any
+	Object     Object
 	Runtime    *Runtime
 	Features   *Features
 	Response   ResponseWriter
 }
 
-// Decode unmarshals the request payload into target.
+// Decode copies the protocol-decoded payload, or unmarshals legacy JSON data, into target.
 func (ctx RequestContext) Decode(target any) error {
 	if ctx.Payload != nil {
 		return decodePayload(ctx.Payload, target)
@@ -255,6 +257,116 @@ func (ctx RequestContext) Respond(message any) error {
 	return ctx.Response.Respond(message)
 }
 
+// RequestSceneSwitch asks the runtime to move the current object to targetScene.
+func (ctx RequestContext) RequestSceneSwitch(targetScene SceneID) (SceneSwitchDecision, error) {
+	if ctx.Runtime == nil {
+		return SceneSwitchDecision{}, ErrMissingSceneRuntime
+	}
+
+	return ctx.Runtime.requestSceneSwitch(SceneSwitchContext{
+		Transport:   ctx.Transport,
+		ClientID:    ctx.ClientID,
+		Tick:        ctx.Tick,
+		ReceivedAt:  ctx.ReceivedAt,
+		Request:     ctx.Request,
+		Payload:     ctx.Payload,
+		Object:      ctx.Object,
+		ObjectType:  ctx.Request.ObjectType,
+		ObjectID:    ctx.Request.ObjectID,
+		TargetScene: targetScene,
+		Runtime:     ctx.Runtime,
+		Features:    ctx.Features,
+		Response:    ctx.Response,
+	})
+}
+
+// SceneSwitchHandler validates scene switch requests for an object.
+type SceneSwitchHandler interface {
+	OnSceneSwitchRequest(SceneSwitchContext) (SceneSwitchDecision, error)
+}
+
+// SceneSwitchContext describes a server-owned scene switch request.
+type SceneSwitchContext struct {
+	Transport    string
+	ClientID     string
+	Tick         uint64
+	ReceivedAt   time.Time
+	Request      RequestMessage
+	Payload      any
+	Object       Object
+	ObjectType   string
+	ObjectID     string
+	CurrentScene SceneID
+	TargetScene  SceneID
+	Runtime      *Runtime
+	Features     *Features
+	Response     ResponseWriter
+}
+
+// Decode copies the protocol-decoded payload, or unmarshals legacy JSON data, into target.
+func (ctx SceneSwitchContext) Decode(target any) error {
+	if ctx.Payload != nil {
+		return decodePayload(ctx.Payload, target)
+	}
+	if len(ctx.Request.Data) == 0 {
+		return nil
+	}
+
+	return json.Unmarshal(ctx.Request.Data, target)
+}
+
+// Respond sends an immediate scene switch response through the request transport.
+func (ctx SceneSwitchContext) Respond(message any) error {
+	if ctx.Response == nil {
+		return ErrResponsesUnsupported
+	}
+
+	return ctx.Response.Respond(message)
+}
+
+// SceneSwitchDecision describes whether a scene switch was accepted.
+type SceneSwitchDecision struct {
+	Allowed            bool    `json:"allowed"`
+	Scene              SceneID `json:"scene,omitempty"`
+	Reason             string  `json:"reason,omitempty"`
+	ClearClientObjects bool    `json:"clearClientObjects,omitempty"`
+	Data               any     `json:"data,omitempty"`
+}
+
+// SceneSwitchAllowed accepts a switch to the requested scene.
+func SceneSwitchAllowed() SceneSwitchDecision {
+	return SceneSwitchDecision{Allowed: true, ClearClientObjects: true}
+}
+
+// SceneSwitchAllowedTo accepts a switch and redirects it to sceneID.
+func SceneSwitchAllowedTo(sceneID SceneID) SceneSwitchDecision {
+	decision := SceneSwitchAllowed()
+	decision.Scene = sceneID
+	return decision
+}
+
+// SceneSwitchDenied rejects a switch with a reason code or message.
+func SceneSwitchDenied(reason string) SceneSwitchDecision {
+	return SceneSwitchDecision{Allowed: false, Reason: reason}
+}
+
+// SceneSwitchRequest is a standard payload for client scene switch requests.
+type SceneSwitchRequest struct {
+	TargetScene SceneID `json:"targetScene"`
+}
+
+// SceneSwitchResponse is the standard immediate response for scene switch requests.
+type SceneSwitchResponse struct {
+	Type               string  `json:"type"`
+	Sequence           uint64  `json:"seq,omitempty"`
+	OK                 bool    `json:"ok"`
+	Scene              SceneID `json:"scene,omitempty"`
+	PreviousScene      SceneID `json:"previousScene,omitempty"`
+	Reason             string  `json:"reason,omitempty"`
+	ClearClientObjects bool    `json:"clearClientObjects,omitempty"`
+	Data               any     `json:"data,omitempty"`
+}
+
 // AuthenticationContext describes an authentication request.
 type AuthenticationContext struct {
 	Transport    string
@@ -268,7 +380,7 @@ type AuthenticationContext struct {
 	Features     *Features
 }
 
-// Decode unmarshals the authentication payload into target.
+// Decode copies the protocol-decoded payload, or unmarshals legacy JSON data, into target.
 func (ctx AuthenticationContext) Decode(target any) error {
 	if ctx.Payload != nil {
 		return decodePayload(ctx.Payload, target)

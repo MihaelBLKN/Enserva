@@ -2,7 +2,7 @@
 
 ## Is Enserva a full game server?
 
-No. Enserva is an early game-server networking API. It provides a small authoritative runtime, UDP transport, object hooks, snapshots, and sample objects.
+Enserva is a server runtime, not a complete game backend product. It gives you authoritative objects, ticks, UDP transport, snapshots, interest filtering, scenes, authentication hooks, and debug tooling. You still own game rules, persistence, matchmaking, deployment, and client protocol design.
 
 ## Can clients create objects by sending requests?
 
@@ -24,6 +24,14 @@ No. `netObjects.PlayerAuthenticator` creates a new player for each authenticatio
 
 Yes. Implement `SnapshotVisible() bool` and return `false`.
 
+## Can clients switch scenes directly?
+
+Clients can request a scene switch, but the server decides. Standard `scene.switch` requests route to the target object's `OnSceneSwitchRequest`, and scene state is only mutated when the handler returns an allowed decision.
+
+## Are scenes the same as loading maps?
+
+No. Scenes are runtime visibility and membership state. Your game code still owns map loading, spawn rules, persistence, and any gameplay consequences of entering or leaving a scene.
+
 ## Are object hooks called concurrently?
 
 The runtime serializes calls to tick, request, authentication, and snapshot hooks with `hooksMu`. Long-running hooks can delay other runtime work.
@@ -34,4 +42,4 @@ Enserva ships with a UDP transport. Runtime contexts include a `Transport` field
 
 ## Is there a stable wire protocol?
 
-The current JSON request shapes are documented in [Configuration](configuration.md), and the binary packet format is documented in [Wire Protocol](api/wire-protocol.md). The project is still early, so treat both protocols as provisional until releases document compatibility guarantees.
+The binary packet format is the preferred client protocol and is documented in [Wire Protocol](api/wire-protocol.md). Legacy JSON request shapes are documented in [Configuration](configuration.md) for compatibility and tooling. The project is still early, so treat both protocols as provisional until releases document compatibility guarantees.

@@ -1,6 +1,6 @@
 # Wire Protocol
 
-Enserva's UDP transport supports a binary packet format for hot-path multiplayer traffic. Legacy JSON request datagrams are still accepted for simple clients and development tooling, but binary clients should use the wire protocol.
+Enserva's UDP transport uses binary wire packets as the primary client protocol. New clients should send wire packets, use the built-in protocol and engine messages where they fit, and register typed game messages for project-specific traffic. Legacy JSON request datagrams are still accepted for compatibility, simple scripts, and development tooling.
 
 ## Packet Format
 
@@ -39,154 +39,251 @@ Oversized packets, malformed lengths, and unsupported protocol versions are reje
 
 Register custom messages on the server or runtime before starting the transport:
 
-```go
-type CastSpell struct {
-	PlayerID string
-	SpellID  uint16
-}
+=== "GoLang"
 
-err := server.RegisterWireMessage(network.WireMessageDefinition{
-	ID:          network.WireMessageGameMin + 10,
-	Name:        "game.cast_spell",
-	Direction:   network.WireDirectionClientToServer,
-	MessageType: reflect.TypeOf(CastSpell{}),
-	Encode: func(message any) ([]byte, error) {
-		cast := message.(CastSpell)
-		var buffer bytes.Buffer
-		// Write a bounded string and fixed-width fields in your chosen schema.
-		binary.Write(&buffer, binary.BigEndian, uint16(len(cast.PlayerID)))
-		buffer.WriteString(cast.PlayerID)
-		binary.Write(&buffer, binary.BigEndian, cast.SpellID)
-		return buffer.Bytes(), nil
-	},
-	Decode: func(payload []byte) (any, error) {
-		reader := bytes.NewReader(payload)
-		var length uint16
-		if err := binary.Read(reader, binary.BigEndian, &length); err != nil {
-			return nil, err
-		}
-		playerID := make([]byte, length)
-		if _, err := reader.Read(playerID); err != nil {
-			return nil, err
-		}
-		var spellID uint16
-		if err := binary.Read(reader, binary.BigEndian, &spellID); err != nil {
-			return nil, err
-		}
-		return CastSpell{PlayerID: string(playerID), SpellID: spellID}, nil
-	},
-	Validate: func(message any) error {
-		cast := message.(CastSpell)
-		if cast.PlayerID == "" {
-			return errors.New("missing player id")
-		}
-		return nil
-	},
-	Handler: func(ctx network.WireMessageContext) error {
-		cast := ctx.Message.(CastSpell)
-		// Route into your game systems using ctx.Runtime, ctx.ClientID, or ctx.Response.
-		_ = cast
-		return nil
-	},
-})
-```
+    ```go
+    type CastSpell struct {
+    	PlayerID string
+    	SpellID  uint16
+    }
+
+    err := server.RegisterWireMessage(network.WireMessageDefinition{
+    	ID:          network.WireMessageGameMin + 10,
+    	Name:        "game.cast_spell",
+    	Direction:   network.WireDirectionClientToServer,
+    	MessageType: reflect.TypeOf(CastSpell{}),
+    	Encode: func(message any) ([]byte, error) {
+    		cast := message.(CastSpell)
+    		var buffer bytes.Buffer
+    		// Write a bounded string and fixed-width fields in your chosen schema.
+    		binary.Write(&buffer, binary.BigEndian, uint16(len(cast.PlayerID)))
+    		buffer.WriteString(cast.PlayerID)
+    		binary.Write(&buffer, binary.BigEndian, cast.SpellID)
+    		return buffer.Bytes(), nil
+    	},
+    	Decode: func(payload []byte) (any, error) {
+    		reader := bytes.NewReader(payload)
+    		var length uint16
+    		if err := binary.Read(reader, binary.BigEndian, &length); err != nil {
+    			return nil, err
+    		}
+    		playerID := make([]byte, length)
+    		if _, err := reader.Read(playerID); err != nil {
+    			return nil, err
+    		}
+    		var spellID uint16
+    		if err := binary.Read(reader, binary.BigEndian, &spellID); err != nil {
+    			return nil, err
+    		}
+    		return CastSpell{PlayerID: string(playerID), SpellID: spellID}, nil
+    	},
+    	Validate: func(message any) error {
+    		cast := message.(CastSpell)
+    		if cast.PlayerID == "" {
+    			return errors.New("missing player id")
+    		}
+    		return nil
+    	},
+    	Handler: func(ctx network.WireMessageContext) error {
+    		cast := ctx.Message.(CastSpell)
+    		// Route into your game systems using ctx.Runtime, ctx.ClientID, or ctx.Response.
+    		_ = cast
+    		return nil
+    	},
+    })
+    ```
+
+=== "C#"
+
+    ```csharp
+    using System.Buffers.Binary;
+    using System.Text;
+
+    public readonly record struct CastSpell(string PlayerId, ushort SpellId);
+
+    server.RegisterWireMessage(new WireMessageDefinition
+    {
+        Id = EnservaWire.GameMin + 10,
+        Name = "game.cast_spell",
+        Direction = WireMessageDirection.ClientToServer,
+        MessageType = typeof(CastSpell),
+        Encode = message =>
+        {
+            var cast = (CastSpell)message;
+            byte[] playerId = Encoding.UTF8.GetBytes(cast.PlayerId);
+            byte[] payload = new byte[2 + playerId.Length + 2];
+            BinaryPrimitives.WriteUInt16BigEndian(payload.AsSpan(0, 2), (ushort)playerId.Length);
+            playerId.CopyTo(payload.AsSpan(2));
+            BinaryPrimitives.WriteUInt16BigEndian(payload.AsSpan(2 + playerId.Length, 2), cast.SpellId);
+            return payload;
+        },
+        Decode = payload =>
+        {
+            ushort length = BinaryPrimitives.ReadUInt16BigEndian(payload.AsSpan(0, 2));
+            string playerId = Encoding.UTF8.GetString(payload.AsSpan(2, length));
+            ushort spellId = BinaryPrimitives.ReadUInt16BigEndian(payload.AsSpan(2 + length, 2));
+            return new CastSpell(playerId, spellId);
+        },
+        Validate = message =>
+        {
+            var cast = (CastSpell)message;
+            if (string.IsNullOrWhiteSpace(cast.PlayerId))
+                throw new InvalidOperationException("missing player id");
+        },
+    });
+    ```
 
 The registry owns message encoding, decoding, validation, and optional dispatch. The packet framing layer only sees message IDs and bytes, so new game messages do not require changes to UDP transport or packet parsing code.
 
 For compatibility with the existing object model, Enserva registers an engine-level `ObjectRequest` message and a small built-in `PlayerInput` adapter. Games can ignore those and register their own messages in the game range.
 
-## Tiny C# UDP Examples
+## Tiny UDP Examples
 
 These examples are intentionally bare bones. They only show the packet shape. Production clients should add timeouts, retries, receive loops, sequence tracking, validation, and proper message-specific encoders.
 
-### Legacy JSON Request
-
-```csharp
-using System.Net.Sockets;
-using System.Text;
-
-using var udp = new UdpClient();
-
-var json = """
-{
-  "seq": 1,
-  "objectType": "player",
-  "objectId": "player-1",
-  "action": "input",
-  "data": { "x": 1, "y": 0, "z": 0 }
-}
-""";
-
-byte[] payload = Encoding.UTF8.GetBytes(json);
-await udp.SendAsync(payload, payload.Length, "127.0.0.1", 9000);
-```
-
 ### Wire Player Input
 
-This sends one binary `engine.player_input` message (`0x0101`) inside one Wire packet.
+This sends one binary `engine.player_input` message (`0x0101`) inside one wire packet.
 
-```csharp
-using System.Buffers.Binary;
-using System.Net.Sockets;
-using System.Text;
+=== "GoLang"
 
-static void WriteU16(List<byte> buffer, ushort value)
-{
-    Span<byte> bytes = stackalloc byte[2];
-    BinaryPrimitives.WriteUInt16BigEndian(bytes, value);
-    buffer.AddRange(bytes.ToArray());
-}
+    ```go
+    conn, err := net.Dial("udp", "127.0.0.1:9000")
+    if err != nil {
+    	return err
+    }
+    defer conn.Close()
 
-static void WriteU32(List<byte> buffer, uint value)
-{
-    Span<byte> bytes = stackalloc byte[4];
-    BinaryPrimitives.WriteUInt32BigEndian(bytes, value);
-    buffer.AddRange(bytes.ToArray());
-}
+    input, err := network.EncodeClientMessage(network.PlayerInput{
+    	ObjectID: "player-1",
+    	X:        1,
+    	Y:        0,
+    	Z:        0,
+    })
+    if err != nil {
+    	return err
+    }
 
-static void WriteU64(List<byte> buffer, ulong value)
-{
-    Span<byte> bytes = stackalloc byte[8];
-    BinaryPrimitives.WriteUInt64BigEndian(bytes, value);
-    buffer.AddRange(bytes.ToArray());
-}
+    packet, err := network.EncodePacket(1, []network.WireMessage{input})
+    if err != nil {
+    	return err
+    }
 
-static void WriteF32(List<byte> buffer, float value)
-{
-    Span<byte> bytes = stackalloc byte[4];
-    BinaryPrimitives.WriteUInt32BigEndian(bytes, BitConverter.SingleToUInt32Bits(value));
-    buffer.AddRange(bytes.ToArray());
-}
+    _, err = conn.Write(packet)
+    return err
+    ```
 
-static void WriteString(List<byte> buffer, string value)
-{
-    byte[] text = Encoding.UTF8.GetBytes(value);
-    WriteU16(buffer, (ushort)text.Length);
-    buffer.AddRange(text);
-}
+=== "C#"
 
-var messagePayload = new List<byte>();
-WriteString(messagePayload, "player-1"); // objectId
-WriteF32(messagePayload, 1.0f);          // x
-WriteF32(messagePayload, 0.0f);          // y
-WriteF32(messagePayload, 0.0f);          // z
+    ```csharp
+    using System.Buffers.Binary;
+    using System.Net.Sockets;
+    using System.Text;
 
-var messages = new List<byte>();
-WriteU16(messages, 0x0101);                         // engine.player_input
-WriteU32(messages, (uint)messagePayload.Count);
-messages.AddRange(messagePayload);
+    static void WriteU16(List<byte> buffer, ushort value)
+    {
+        Span<byte> bytes = stackalloc byte[2];
+        BinaryPrimitives.WriteUInt16BigEndian(bytes, value);
+        buffer.AddRange(bytes.ToArray());
+    }
 
-var packet = new List<byte>();
-WriteU16(packet, 0x4553);                // magic "ES"
-packet.Add(1);                           // protocol version
-packet.Add(1);                           // message count
-WriteU32(packet, 0);                     // reserved
-WriteU64(packet, 1);                     // sequence
-WriteU64(packet, 0);                     // ack
-WriteU64(packet, 0);                     // ack_bits
-WriteU32(packet, (uint)messages.Count);  // payload length
-packet.AddRange(messages);
+    static void WriteU32(List<byte> buffer, uint value)
+    {
+        Span<byte> bytes = stackalloc byte[4];
+        BinaryPrimitives.WriteUInt32BigEndian(bytes, value);
+        buffer.AddRange(bytes.ToArray());
+    }
 
-using var udp = new UdpClient();
-await udp.SendAsync(packet.ToArray(), packet.Count, "127.0.0.1", 9000);
-```
+    static void WriteU64(List<byte> buffer, ulong value)
+    {
+        Span<byte> bytes = stackalloc byte[8];
+        BinaryPrimitives.WriteUInt64BigEndian(bytes, value);
+        buffer.AddRange(bytes.ToArray());
+    }
+
+    static void WriteF32(List<byte> buffer, float value)
+    {
+        Span<byte> bytes = stackalloc byte[4];
+        BinaryPrimitives.WriteUInt32BigEndian(bytes, BitConverter.SingleToUInt32Bits(value));
+        buffer.AddRange(bytes.ToArray());
+    }
+
+    static void WriteString(List<byte> buffer, string value)
+    {
+        byte[] text = Encoding.UTF8.GetBytes(value);
+        WriteU16(buffer, (ushort)text.Length);
+        buffer.AddRange(text);
+    }
+
+    var messagePayload = new List<byte>();
+    WriteString(messagePayload, "player-1"); // objectId
+    WriteF32(messagePayload, 1.0f);          // x
+    WriteF32(messagePayload, 0.0f);          // y
+    WriteF32(messagePayload, 0.0f);          // z
+
+    var messages = new List<byte>();
+    WriteU16(messages, 0x0101);                         // engine.player_input
+    WriteU32(messages, (uint)messagePayload.Count);
+    messages.AddRange(messagePayload);
+
+    var packet = new List<byte>();
+    WriteU16(packet, 0x4553);                // magic "ES"
+    packet.Add(1);                           // protocol version
+    packet.Add(1);                           // message count
+    WriteU32(packet, 0);                     // reserved
+    WriteU64(packet, 1);                     // sequence
+    WriteU64(packet, 0);                     // ack
+    WriteU64(packet, 0);                     // ack_bits
+    WriteU32(packet, (uint)messages.Count);  // payload length
+    packet.AddRange(messages);
+
+    using var udp = new UdpClient();
+    await udp.SendAsync(packet.ToArray(), packet.Count, "127.0.0.1", 9000);
+    ```
+
+### Legacy JSON Request
+
+This sends the same sample input through the supported legacy JSON datagram path.
+
+=== "GoLang"
+
+    ```go
+    payload := []byte(`{
+      "seq": 1,
+      "objectType": "player",
+      "objectId": "player-1",
+      "action": "input",
+      "data": { "x": 1, "y": 0, "z": 0 }
+    }`)
+
+    conn, err := net.Dial("udp", "127.0.0.1:9000")
+    if err != nil {
+    	return err
+    }
+    defer conn.Close()
+
+    _, err = conn.Write(payload)
+    return err
+    ```
+
+=== "C#"
+
+    ```csharp
+    using System.Net.Sockets;
+    using System.Text;
+
+    using var udp = new UdpClient();
+
+    var json = """
+    {
+      "seq": 1,
+      "objectType": "player",
+      "objectId": "player-1",
+      "action": "input",
+      "data": { "x": 1, "y": 0, "z": 0 }
+    }
+    """;
+
+    byte[] payload = Encoding.UTF8.GetBytes(json);
+    await udp.SendAsync(payload, payload.Length, "127.0.0.1", 9000);
+    ```

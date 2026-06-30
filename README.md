@@ -4,15 +4,18 @@ Enserva is an early Go networking runtime for authoritative multiplayer servers 
 
 The core idea is simple: your server owns the world. You define objects such as players, buildings, projectiles, doors, or match state, register them with the runtime, and decide how they respond to ticks, requests, authentication, and snapshots. Clients can send requests to existing objects, but they cannot create authoritative state by inventing object IDs.
 
+Enserva's primary client protocol is the binary wire protocol: buffer-backed wire packets documented in the [Wire Protocol](https://mihaelblkn.github.io/Enserva/api/wire-protocol/) guide. Legacy JSON datagrams are still supported for compatibility, debugging, and simple tools, but new clients should send wire packets and register typed game messages for hot-path gameplay.
+
 ## Features
 
 - Authoritative server-side object registry.
 - Configurable tick rate and snapshot rate.
 - Optional object hooks for initialization, per-tick updates, once-per-second updates, client requests, authentication, and snapshot visibility.
-- UDP transport with request sequencing, client tracking, authentication gating, JSON messages, and binary wire packets.
+- UDP transport with binary wire packets, request sequencing, client tracking, authentication gating, and legacy JSON compatibility.
 - Server-side object factories for controlled object creation.
 - Snapshot broadcasting grouped by object type and object ID.
 - Per-client interest management for filtering snapshot objects with a spatial hash.
+- Scene management for rooms, maps, shards, scene switches, and scene-filtered snapshots.
 - Optional browser debug UI for runtime state, config, UDP clients, features, and object snapshots.
 - Example `Player`, `Building`, and authentication objects.
 
@@ -67,6 +70,7 @@ The full docs live in `documentation/docs` and can be built with MkDocs Material
 - [Configuration](https://mihaelblkn.github.io/Enserva/configuration/)
 - [Architecture](https://mihaelblkn.github.io/Enserva/architecture/)
 - [Features](https://mihaelblkn.github.io/Enserva/features/interest-management/)
+- [Scenes](https://mihaelblkn.github.io/Enserva/guides/scenes/)
 - [Wire Protocol](https://mihaelblkn.github.io/Enserva/api/wire-protocol/)
 - [API Reference](https://mihaelblkn.github.io/Enserva/developer-api/)
 

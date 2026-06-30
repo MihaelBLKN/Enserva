@@ -20,23 +20,47 @@ The feature uses object snapshots for position extraction. That means the field 
 
 `OnInit` runs when an object is registered with the runtime. It is the intended place to enable interest management for that object.
 
-```go
-func (player *Player) OnInit(ctx network.InitContext) {
-	ctx.Runtime().Features().EnableInterestManagement(
-		network.PlayerInterest(player, "x", "y", "z", 750),
-	)
-}
-```
+=== "GoLang"
+
+    ```go
+    func (player *Player) OnInit(ctx network.InitContext) {
+    	ctx.Runtime().Features().EnableInterestManagement(
+    		network.PlayerInterest(player, "x", "y", "z", 750),
+    	)
+    }
+    ```
+
+=== "C#"
+
+    ```csharp
+    public void OnInit(InitContext ctx)
+    {
+        ctx.Runtime.Features.EnableInterestManagement(
+            Interest.Player(this, "x", "y", "z", radius: 750));
+    }
+    ```
 
 For non-player objects:
 
-```go
-func (building *Building) OnInit(ctx network.InitContext) {
-	ctx.Runtime().Features().EnableInterestManagement(
-		network.GameObjectInterest(building, "x", "y", "z"),
-	)
-}
-```
+=== "GoLang"
+
+    ```go
+    func (building *Building) OnInit(ctx network.InitContext) {
+    	ctx.Runtime().Features().EnableInterestManagement(
+    		network.GameObjectInterest(building, "x", "y", "z"),
+    	)
+    }
+    ```
+
+=== "C#"
+
+    ```csharp
+    public void OnInit(InitContext ctx)
+    {
+        ctx.Runtime.Features.EnableInterestManagement(
+            Interest.GameObject(this, "x", "y", "z"));
+    }
+    ```
 
 The helper functions fill in the object's `ObjectType()` and `ObjectID()` for you, which keeps the setup to one line.
 
@@ -44,19 +68,31 @@ The helper functions fill in the object's `ObjectType()` and `ObjectID()` for yo
 
 For 2D games, use the `2D` helpers and omit the Z field:
 
-```go
-func (player *Player) OnInit(ctx network.InitContext) {
-	ctx.Runtime().Features().EnableInterestManagement(
-		network.PlayerInterest2D(player, "x", "y", 500),
-	)
-}
+=== "GoLang"
 
-func (tree *Tree) OnInit(ctx network.InitContext) {
-	ctx.Runtime().Features().EnableInterestManagement(
-		network.GameObjectInterest2D(tree, "x", "y"),
-	)
-}
-```
+    ```go
+    func (player *Player) OnInit(ctx network.InitContext) {
+    	ctx.Runtime().Features().EnableInterestManagement(
+    		network.PlayerInterest2D(player, "x", "y", 500),
+    	)
+    }
+
+    func (tree *Tree) OnInit(ctx network.InitContext) {
+    	ctx.Runtime().Features().EnableInterestManagement(
+    		network.GameObjectInterest2D(tree, "x", "y"),
+    	)
+    }
+    ```
+
+=== "C#"
+
+    ```csharp
+    public void OnInit(InitContext ctx)
+    {
+        ctx.Runtime.Features.EnableInterestManagement(
+            Interest.Player2D(this, "x", "y", radius: 500));
+    }
+    ```
 
 Spatial hash lookups use X/Y cells, then exact distance checks use X/Y only for 2D registrations and X/Y/Z for 3D registrations.
 
@@ -64,29 +100,68 @@ Spatial hash lookups use X/Y cells, then exact distance checks use X/Y only for 
 
 Position fields can be Go struct field names:
 
-```go
-type PlayerSnapshot struct {
-	X float64
-	Y float64
-	Z float64
-}
-```
+=== "GoLang"
+
+    ```go
+    type PlayerSnapshot struct {
+    	X float64
+    	Y float64
+    	Z float64
+    }
+    ```
+
+=== "C#"
+
+    ```csharp
+    public sealed class PlayerSnapshot
+    {
+        public double X { get; init; }
+        public double Y { get; init; }
+        public double Z { get; init; }
+    }
+    ```
 
 Or JSON tag names:
 
-```go
-type PlayerSnapshot struct {
-	PositionX float64 `json:"x"`
-	PositionY float64 `json:"y"`
-	PositionZ float64 `json:"z,omitempty"`
-}
-```
+=== "GoLang"
+
+    ```go
+    type PlayerSnapshot struct {
+    	PositionX float64 `json:"x"`
+    	PositionY float64 `json:"y"`
+    	PositionZ float64 `json:"z,omitempty"`
+    }
+    ```
+
+=== "C#"
+
+    ```csharp
+    public sealed class PlayerSnapshot
+    {
+        [JsonPropertyName("x")]
+        public double PositionX { get; init; }
+
+        [JsonPropertyName("y")]
+        public double PositionY { get; init; }
+
+        [JsonPropertyName("z")]
+        public double PositionZ { get; init; }
+    }
+    ```
 
 With the tagged version, use:
 
-```go
-network.PlayerInterest(player, "x", "y", "z", 750)
-```
+=== "GoLang"
+
+    ```go
+    network.PlayerInterest(player, "x", "y", "z", 750)
+    ```
+
+=== "C#"
+
+    ```csharp
+    Interest.Player(player, "x", "y", "z", radius: 750);
+    ```
 
 Map snapshots with string keys are also supported when their values are numeric or numeric strings.
 
@@ -109,31 +184,65 @@ This keeps interest management incremental. You can opt in only the object types
 
 If you do not want to use the helper functions, you can pass `InterestManagementConfig` directly:
 
-```go
-ctx.Runtime().Features().EnableInterestManagement(network.InterestManagementConfig{
-	SubjectType: network.InterestPlayer,
-	ObjectType:  player.ObjectType(),
-	ObjectID:    player.ObjectID(),
-	XField:      "x",
-	YField:      "y",
-	ZField:      "z",
-	Radius:      750,
-	IncludeSelf: true,
-})
-```
+=== "GoLang"
+
+    ```go
+    ctx.Runtime().Features().EnableInterestManagement(network.InterestManagementConfig{
+    	SubjectType: network.InterestPlayer,
+    	ObjectType:  player.ObjectType(),
+    	ObjectID:    player.ObjectID(),
+    	XField:      "x",
+    	YField:      "y",
+    	ZField:      "z",
+    	Radius:      750,
+    	IncludeSelf: true,
+    })
+    ```
+
+=== "C#"
+
+    ```csharp
+    ctx.Runtime.Features.EnableInterestManagement(new InterestManagementConfig
+    {
+        SubjectType = InterestSubject.Player,
+        ObjectType = player.ObjectType,
+        ObjectId = player.ObjectId,
+        XField = "x",
+        YField = "y",
+        ZField = "z",
+        Radius = 750,
+        IncludeSelf = true,
+    });
+    ```
 
 Game objects use `network.InterestGameObject` and usually do not need a radius:
 
-```go
-ctx.Runtime().Features().EnableInterestManagement(network.InterestManagementConfig{
-	SubjectType: network.InterestGameObject,
-	ObjectType:  pickup.ObjectType(),
-	ObjectID:    pickup.ObjectID(),
-	XField:      "x",
-	YField:      "y",
-	ZField:      "z",
-})
-```
+=== "GoLang"
+
+    ```go
+    ctx.Runtime().Features().EnableInterestManagement(network.InterestManagementConfig{
+    	SubjectType: network.InterestGameObject,
+    	ObjectType:  pickup.ObjectType(),
+    	ObjectID:    pickup.ObjectID(),
+    	XField:      "x",
+    	YField:      "y",
+    	ZField:      "z",
+    })
+    ```
+
+=== "C#"
+
+    ```csharp
+    ctx.Runtime.Features.EnableInterestManagement(new InterestManagementConfig
+    {
+        SubjectType = InterestSubject.GameObject,
+        ObjectType = pickup.ObjectType,
+        ObjectId = pickup.ObjectId,
+        XField = "x",
+        YField = "y",
+        ZField = "z",
+    });
+    ```
 
 ## Spatial Hash Behavior
 

@@ -31,6 +31,12 @@ var (
 	ErrMissingAuthenticationID = errors.New("missing authentication id")
 	// ErrResponsesUnsupported indicates that the current transport cannot send immediate responses.
 	ErrResponsesUnsupported = errors.New("request responses are unsupported")
+	// ErrMissingSceneRuntime indicates that a scene switch was requested without a runtime.
+	ErrMissingSceneRuntime = errors.New("missing scene runtime")
+	// ErrMissingSceneID indicates that a scene switch target was empty.
+	ErrMissingSceneID = errors.New("missing scene id")
+	// ErrSceneSwitchUnsupported indicates that an object cannot validate scene switches.
+	ErrSceneSwitchUnsupported = errors.New("object does not handle scene switch requests")
 )
 
 // Runtime owns registered objects and advances the authoritative simulation.
@@ -101,6 +107,7 @@ func (runtime *Runtime) RegisterObject(object Object) error {
 	runtime.mu.Unlock()
 
 	runtime.features.DisableInterestManagement(objectType, objectID)
+	runtime.features.DisableSceneManagement(objectType, objectID)
 	runtime.initializeObject(object, objectType, objectID)
 
 	return nil
@@ -134,6 +141,7 @@ func (runtime *Runtime) RegisterAuthenticationObject(object Object) error {
 	runtime.mu.Unlock()
 
 	runtime.features.DisableInterestManagement(objectType, objectID)
+	runtime.features.DisableSceneManagement(objectType, objectID)
 	runtime.initializeObject(object, objectType, objectID)
 
 	return nil
@@ -161,6 +169,7 @@ func (runtime *Runtime) RemoveObject(objectType, objectID string) {
 		runtime.authenticationObjectID = ""
 	}
 	runtime.features.DisableInterestManagement(objectType, objectID)
+	runtime.features.DisableSceneManagement(objectType, objectID)
 }
 
 // GetObject returns a registered object by type and id.
@@ -315,12 +324,67 @@ func (runtime *Runtime) HandleRequest(ctx RequestContext) error {
 	if !ok {
 		return fmt.Errorf("%w: %s/%s", ErrObjectNotFound, ctx.Request.ObjectType, ctx.Request.ObjectID)
 	}
+	ctx.Object = object
+
+	if isSceneSwitchAction(ctx.Request.Action) {
+		return runtime.handleSceneSwitchRequest(ctx)
+	}
 
 	if handler, ok := object.(RequestHandler); ok {
 		return handler.OnRequest(ctx)
 	}
 
 	return nil
+}
+
+func (runtime *Runtime) handleSceneSwitchRequest(ctx RequestContext) error {
+	var request SceneSwitchRequest
+	if err := ctx.Decode(&request); err != nil {
+		return err
+	}
+
+	previousScene, _ := runtime.features.ObjectScene(ctx.Request.ObjectType, ctx.Request.ObjectID)
+	decision, err := runtime.requestSceneSwitch(SceneSwitchContext{
+		Transport:   ctx.Transport,
+		ClientID:    ctx.ClientID,
+		Tick:        ctx.Tick,
+		ReceivedAt:  ctx.ReceivedAt,
+		Request:     ctx.Request,
+		Payload:     ctx.Payload,
+		Object:      ctx.Object,
+		ObjectType:  ctx.Request.ObjectType,
+		ObjectID:    ctx.Request.ObjectID,
+		TargetScene: request.TargetScene,
+		Runtime:     runtime,
+		Features:    ctx.Features,
+		Response:    ctx.Response,
+	})
+	if err != nil {
+		return err
+	}
+	if ctx.Response == nil {
+		return nil
+	}
+
+	return ctx.Respond(SceneSwitchResponse{
+		Type:               "scene.switch",
+		Sequence:           ctx.Request.Sequence,
+		OK:                 decision.Allowed,
+		Scene:              decision.Scene,
+		PreviousScene:      previousScene,
+		Reason:             decision.Reason,
+		ClearClientObjects: decision.ClearClientObjects,
+		Data:               decision.Data,
+	})
+}
+
+func isSceneSwitchAction(action string) bool {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "scene", "scene.switch", "switchscene", "switch_scene":
+		return true
+	default:
+		return false
+	}
 }
 
 // HandleAuthenticationAttempt routes an authentication request to the registered handler.
@@ -371,19 +435,21 @@ func (runtime *Runtime) SnapshotForClient(clientID string) SnapshotData {
 	defer runtime.hooksMu.Unlock()
 
 	objects := runtime.objectList()
+	scenes := runtime.features.sceneState()
+	clientScene, filtersScene := scenes.clientScene(clientID)
 	interest := runtime.features.interestState()
 	if !interest.enabled || clientID == "" {
-		return snapshotFromObjects(objects)
+		return snapshotFromObjectsForClient(objects, scenes, clientScene, filtersScene)
 	}
 
 	playerConfig, ok := interest.playerForClient(clientID)
 	if !ok {
-		return snapshotFromObjects(objects)
+		return snapshotFromObjectsForClient(objects, scenes, clientScene, filtersScene)
 	}
 
-	interestObjects, playerIndex, ok := interestSnapshotObjects(objects, interest, playerConfig)
+	interestObjects, playerIndex, ok := interestSnapshotObjects(objects, interest, playerConfig, scenes, clientScene, filtersScene)
 	if !ok {
-		return snapshotFromObjects(objects)
+		return snapshotFromObjectsForClient(objects, scenes, clientScene, filtersScene)
 	}
 
 	playerPosition := interestObjects[playerIndex].position
@@ -406,8 +472,105 @@ func (runtime *Runtime) SnapshotForClient(clientID string) SnapshotData {
 	return snapshot
 }
 
+// RequestSceneSwitch asks an object to validate and apply a scene switch.
+func (runtime *Runtime) RequestSceneSwitch(ctx SceneSwitchContext) (SceneSwitchDecision, error) {
+	if ctx.ReceivedAt.IsZero() {
+		ctx.ReceivedAt = time.Now()
+	}
+
+	runtime.hooksMu.Lock()
+	defer runtime.hooksMu.Unlock()
+
+	runtime.mu.RLock()
+	ctx.Tick = runtime.tick
+	runtime.mu.RUnlock()
+	ctx.Runtime = runtime
+	ctx.Features = runtime.Features()
+
+	return runtime.requestSceneSwitch(ctx)
+}
+
+func (runtime *Runtime) requestSceneSwitch(ctx SceneSwitchContext) (SceneSwitchDecision, error) {
+	if runtime == nil {
+		return SceneSwitchDecision{}, ErrMissingSceneRuntime
+	}
+
+	ctx.TargetScene = normalizeSceneID(ctx.TargetScene)
+	if ctx.TargetScene == "" {
+		return SceneSwitchDecision{}, ErrMissingSceneID
+	}
+	if ctx.ReceivedAt.IsZero() {
+		ctx.ReceivedAt = time.Now()
+	}
+	ctx.Runtime = runtime
+	ctx.Features = runtime.Features()
+
+	object := ctx.Object
+	objectType := normalizeObjectKey(ctx.ObjectType)
+	objectID := normalizeObjectKey(ctx.ObjectID)
+	if object != nil {
+		resolvedType, resolvedID, err := objectIdentity(object)
+		if err != nil {
+			return SceneSwitchDecision{}, err
+		}
+		objectType = resolvedType
+		objectID = resolvedID
+	}
+	if objectType == "" {
+		objectType = normalizeObjectKey(ctx.Request.ObjectType)
+	}
+	if objectID == "" {
+		objectID = normalizeObjectKey(ctx.Request.ObjectID)
+	}
+	if objectType == "" {
+		return SceneSwitchDecision{}, ErrMissingObjectType
+	}
+	if objectID == "" {
+		return SceneSwitchDecision{}, ErrMissingObjectID
+	}
+	if object == nil {
+		var ok bool
+		object, ok = runtime.GetObject(objectType, objectID)
+		if !ok {
+			return SceneSwitchDecision{}, fmt.Errorf("%w: %s/%s", ErrObjectNotFound, objectType, objectID)
+		}
+	}
+
+	handler, ok := object.(SceneSwitchHandler)
+	if !ok {
+		return SceneSwitchDecision{}, fmt.Errorf("%w: %s/%s", ErrSceneSwitchUnsupported, objectType, objectID)
+	}
+
+	currentScene, _ := runtime.features.ObjectScene(objectType, objectID)
+	ctx.Object = object
+	ctx.ObjectType = objectType
+	ctx.ObjectID = objectID
+	ctx.CurrentScene = currentScene
+
+	decision, err := handler.OnSceneSwitchRequest(ctx)
+	if err != nil {
+		return decision, err
+	}
+	if !decision.Allowed {
+		return decision, nil
+	}
+
+	finalScene := normalizeSceneID(decision.Scene)
+	if finalScene == "" {
+		finalScene = ctx.TargetScene
+	}
+	decision.Scene = finalScene
+
+	runtime.features.SetObjectScene(objectType, objectID, finalScene)
+	if ctx.ClientID != "" {
+		runtime.features.SetClientScene(ctx.ClientID, finalScene)
+	}
+
+	return decision, nil
+}
+
 // interestSnapshotObjects snapshots objects once and attaches interest metadata.
-func interestSnapshotObjects(objects []Object, state interestState, playerConfig InterestManagementConfig) ([]interestSnapshotObject, int, bool) {
+func interestSnapshotObjects(objects []Object, state interestState, playerConfig InterestManagementConfig, scenes sceneState, clientScene SceneID, filtersScene bool) ([]interestSnapshotObject, int, bool) {
 	interestObjects := make([]interestSnapshotObject, 0, len(objects))
 	playerIndex := -1
 
@@ -426,6 +589,9 @@ func interestSnapshotObjects(objects []Object, state interestState, playerConfig
 			visible:    true,
 		}
 		if visibility, ok := object.(SnapshotVisibility); ok && !visibility.SnapshotVisible() {
+			interestObject.visible = false
+		}
+		if !scenes.objectVisibleToClient(clientScene, filtersScene, objectType, objectID) {
 			interestObject.visible = false
 		}
 
@@ -522,6 +688,28 @@ func visibleInterestObjectKeysLinear(objects []interestSnapshotObject, playerCon
 	}
 
 	return visible
+}
+
+// snapshotFromObjectsForClient builds a snapshot after scene visibility filtering.
+func snapshotFromObjectsForClient(objects []Object, scenes sceneState, clientScene SceneID, filtersScene bool) SnapshotData {
+	snapshot := SnapshotData{}
+	for _, object := range objects {
+		if visibility, ok := object.(SnapshotVisibility); ok && !visibility.SnapshotVisible() {
+			continue
+		}
+
+		objectType, objectID, err := objectIdentity(object)
+		if err != nil {
+			continue
+		}
+		if !scenes.objectVisibleToClient(clientScene, filtersScene, objectType, objectID) {
+			continue
+		}
+
+		addSnapshotObject(snapshot, objectType, objectID, object.Snapshot())
+	}
+
+	return snapshot
 }
 
 // snapshotFromObjects builds a snapshot from visible objects.

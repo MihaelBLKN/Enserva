@@ -16,6 +16,7 @@ type InterestSubject string
 type Features struct {
 	mu       sync.RWMutex
 	interest *InterestManager
+	scenes   *SceneManager
 }
 
 const (

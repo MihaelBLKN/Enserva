@@ -77,4 +77,20 @@ func TestPlayerAuthenticatorCreatesOwnedPlayer(t *testing.T) {
 	if !errors.Is(err, netobjects.ErrUnauthorizedPlayerClient) {
 		t.Fatalf("expected unauthorized player request, got %v", err)
 	}
+
+	err = server.Runtime().HandleRequest(network.RequestContext{
+		ClientID: "different-client",
+		Request: network.RequestMessage{
+			ObjectType: "player",
+			ObjectID:   playerID,
+			Action:     "scene.switch",
+			Data:       json.RawMessage(`{"targetScene":"map-2"}`),
+		},
+	})
+	if !errors.Is(err, netobjects.ErrUnauthorizedPlayerClient) {
+		t.Fatalf("expected unauthorized player scene switch, got %v", err)
+	}
+	if scene, ok := server.Runtime().Features().ObjectScene("player", playerID); !ok || scene != "default" {
+		t.Fatalf("expected unauthorized scene switch to preserve default scene, got %q ok=%v", scene, ok)
+	}
 }

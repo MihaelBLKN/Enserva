@@ -11,6 +11,7 @@ Enserva/
 |   |-- protocol.go            # Config, interfaces, message/context types
 |   |-- payload.go             # Request payload decoding helpers
 |   |-- interest_management.go # Snapshot interest management feature
+|   |-- scene_management.go    # Scene membership and filtering feature
 |   |-- runtime.go             # Runtime registry, hooks, auth, snapshots
 |   |-- server.go              # Server facade
 |   |-- udp.go                 # UDP transport
@@ -51,7 +52,7 @@ flowchart TD
 3. Optional authentication object is registered.
 4. `ListenAndServe` starts the UDP listener.
 5. A goroutine advances runtime ticks at `Config.TickInterval()`.
-6. UDP datagrams are decoded as legacy JSON requests or binary wire packets.
+6. UDP datagrams are decoded as binary wire packets first when they carry the `ES` magic value; legacy JSON requests remain a compatibility path.
 7. Authentication messages go to the authentication object.
 8. Regular object requests route to existing objects by `objectType` and `objectId`.
 9. Snapshots are broadcast every `Config.SnapshotEvery()` ticks.
@@ -65,7 +66,7 @@ sequenceDiagram
     participant Runtime
     participant Object
 
-    Client->>UDP: JSON datagram or binary wire packet
+    Client->>UDP: Binary wire packet or legacy JSON datagram
     UDP->>UDP: accept client and sequence
     opt binary wire packet
         UDP->>UDP: decode registered message payloads
@@ -76,6 +77,12 @@ sequenceDiagram
         Object-->>Runtime: authenticated ID
         Runtime-->>UDP: authenticated ID
         UDP-->>Client: AuthenticationResponse
+    else scene switch request
+        UDP->>Runtime: HandleRequest
+        Runtime->>Runtime: lookup existing object
+        Runtime->>Object: OnSceneSwitchRequest
+        Object-->>Runtime: allow, deny, or redirect
+        Runtime-->>UDP: SceneSwitchResponse when supported
     else object request
         UDP->>Runtime: HandleRequest
         Runtime->>Runtime: lookup existing object
@@ -155,6 +162,7 @@ Use these extension points for application behavior:
 | `network.TickHandler`           | Movement, timers, physics steps, and per-tick simulation. |
 | `network.FullTickHandler`       | Once-per-second counters and lower-frequency behavior.    |
 | `network.AuthenticationHandler` | Mapping transport connections to application identities.  |
+| `network.SceneSwitchHandler`    | Validating and authorizing scene switch requests.         |
 | `network.ObjectFactory`         | Server-controlled creation of objects by type and ID.     |
-| `network.Features`              | Runtime-level opt-in features such as interest management. |
+| `network.Features`              | Runtime-level opt-in features such as interest and scenes. |
 | `network.WireMessageRegistry`   | Custom binary message schemas and optional dispatch.       |

@@ -19,29 +19,28 @@ theme:
     - navigation.top
     - navigation.footer
     - navigation.tracking
+    - navigation.instant
+    - navigation.instant.progress
     - toc.follow
     - search.highlight
     - search.share
+    - search.suggest
     - content.action.edit
     - content.action.view
     - content.code.copy
     - content.code.annotate
     - content.tabs.link
   palette:
-    - media: "(prefers-color-scheme: light)"
-      scheme: default
-      primary: teal
-      accent: amber
-      toggle:
-        icon: material/weather-night
-        name: Switch to dark mode
-    - media: "(prefers-color-scheme: dark)"
-      scheme: slate
-      primary: teal
-      accent: amber
-      toggle:
-        icon: material/weather-sunny
-        name: Switch to light mode
+    - scheme: enserva
+      primary: black
+      accent: indigo
+  font: false
+
+extra_css:
+  - stylesheets/extra.css
+
+extra_javascript:
+  - javascripts/extra.js
 
 plugins:
   - search
@@ -77,6 +76,7 @@ nav:
       - Quick Start: quick-start.md
   - Features:
       - Interest Management: features/interest-management.md
+      - Scenes: guides/scenes.md
   - Guides:
       - Configuration: configuration.md
       - Architecture: architecture.md

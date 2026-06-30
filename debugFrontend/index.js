@@ -14,11 +14,13 @@ const el = {
   objectsPanel: document.getElementById("objectsPanel"),
   udpPanel: document.getElementById("udpPanel"),
   featuresPanel: document.getElementById("featuresPanel"),
+  scenesPanel: document.getElementById("scenesPanel"),
   rawPanel: document.getElementById("rawPanel"),
   runtimeBadge: document.getElementById("runtimeBadge"),
   objectBadge: document.getElementById("objectBadge"),
   udpBadge: document.getElementById("udpBadge"),
   featuresBadge: document.getElementById("featuresBadge"),
+  scenesBadge: document.getElementById("scenesBadge"),
   autoRefresh: document.getElementById("autoRefresh"),
   refreshRate: document.getElementById("refreshRate"),
   refreshButton: document.getElementById("refreshButton"),
@@ -78,6 +80,7 @@ function render() {
   renderObjects(data.runtime.objects || []);
   renderUDP(data.udp);
   renderFeatures(data.features);
+  renderScenes(data.features);
   el.rawPanel.textContent = JSON.stringify(data, null, 2);
 }
 
@@ -89,6 +92,7 @@ function renderMetrics(data) {
     ["Objects", number(summary.objectCount), number(summary.objectTypeCount) + " types"],
     ["Factories", number(summary.factoryCount), "registered"],
     ["UDP Clients", number(summary.udpClientCount), number(summary.authenticatedUdpClientCount) + " authenticated"],
+    ["Scenes", summary.scenesEnabled ? "enabled" : "idle", "scene filtering"],
     ["Snapshots", data.config.snapshotRate + "/s", "every " + data.config.snapshotEvery + " ticks"],
     ["Uptime", udp.uptime || "not started", udp.address || data.config.udpAddress]
   ];
@@ -211,9 +215,34 @@ function renderFeatures(features) {
   el.featuresPanel.innerHTML = table(rows) + players + objects;
 }
 
+function renderScenes(features) {
+  const scenes = (features && features.sceneManagement) || {};
+  const clientScenes = scenes.clientScenes || [];
+  const objectScenes = scenes.objectScenes || [];
+  el.scenesBadge.textContent = scenes.enabled ? "enabled" : "idle";
+
+  const rows = [
+    ["Configured", !!scenes.configured],
+    ["Enabled", !!scenes.enabled],
+    ["Clients", scenes.clientCount || 0],
+    ["Objects", scenes.objectCount || 0]
+  ];
+
+  const clients = renderSceneList("Client scenes", clientScenes);
+  const objects = renderSceneList("Object scenes", objectScenes);
+  el.scenesPanel.innerHTML = table(rows) + clients + objects;
+}
+
+function renderSceneList(title, items) {
+  if (!items.length) return "";
+  return "<div class=\"subsection\"><h3>" + escapeHTML(title) + "</h3>" + table(items.map(function(item) {
+    return [item.key, item.scene];
+  })) + "</div>";
+}
+
 function renderInterestList(title, items) {
   if (!items.length) return "";
-  return "<div style=\"height:12px\"></div><h3>" + escapeHTML(title) + "</h3><div style=\"height:8px\"></div>" + items.map(function(item) {
+  return "<div class=\"subsection\"><h3>" + escapeHTML(title) + "</h3>" + items.map(function(item) {
     return table([
       ["Key", item.key],
       ["Subject", item.subjectType],
@@ -222,7 +251,7 @@ function renderInterestList(title, items) {
       ["Radius", item.radius],
       ["Include self", item.includeSelf]
     ]);
-  }).join("<div style=\"height:8px\"></div>");
+  }).join("<div style=\"height:8px\"></div>") + "</div>";
 }
 
 function table(rows) {
