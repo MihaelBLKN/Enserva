@@ -38,27 +38,32 @@ type DebugSummary struct {
 
 // DebugConfigState contains normalized configuration values for display.
 type DebugConfigState struct {
-	UDPAddress              string  `json:"udpAddress"`
-	TickRate                int     `json:"tickRate"`
-	TickInterval            string  `json:"tickInterval"`
-	TickIntervalMs          float64 `json:"tickIntervalMs"`
-	SnapshotRate            int     `json:"snapshotRate"`
-	SnapshotEvery           uint64  `json:"snapshotEvery"`
-	EnableDeltaSnapshots    bool    `json:"enableDeltaSnapshots"`
-	FullSnapshotInterval    int     `json:"fullSnapshotInterval"`
-	ClientTimeout           string  `json:"clientTimeout"`
-	ClientTimeoutMs         int64   `json:"clientTimeoutMs"`
-	MaxUDPPacketSize        int     `json:"maxUdpPacketSize"`
-	ReliableRetryInterval   string  `json:"reliableRetryInterval"`
-	ReliableRetryIntervalMs float64 `json:"reliableRetryIntervalMs"`
-	ReliableMaxAttempts     int     `json:"reliableMaxAttempts"`
-	ReliableQueueLimit      int     `json:"reliableQueueLimit"`
-	MaxInputFutureTicks     uint64  `json:"maxInputFutureTicks"`
-	MaxInputPastTicks       uint64  `json:"maxInputPastTicks"`
-	InputBufferLimit        int     `json:"inputBufferLimit"`
-	DebugEnabled            bool    `json:"debugEnabled"`
-	DebugAddress            string  `json:"debugAddress"`
-	DebugURL                string  `json:"debugUrl"`
+	UDPAddress                string  `json:"udpAddress"`
+	TickRate                  int     `json:"tickRate"`
+	TickInterval              string  `json:"tickInterval"`
+	TickIntervalMs            float64 `json:"tickIntervalMs"`
+	SnapshotRate              int     `json:"snapshotRate"`
+	SnapshotEvery             uint64  `json:"snapshotEvery"`
+	EnableDeltaSnapshots      bool    `json:"enableDeltaSnapshots"`
+	SupportedWireCapabilities uint64  `json:"supportedWireCapabilities"`
+	FullSnapshotInterval      int     `json:"fullSnapshotInterval"`
+	ClientTimeout             string  `json:"clientTimeout"`
+	ClientTimeoutMs           int64   `json:"clientTimeoutMs"`
+	MaxClients                int     `json:"maxClients"`
+	MaxUDPPacketSize          int     `json:"maxUdpPacketSize"`
+	EnableBandwidthBudget     bool    `json:"enableBandwidthBudget"`
+	ClientBytesPerSecond      int     `json:"clientBytesPerSecond"`
+	DefaultSnapshotPriority   int     `json:"defaultSnapshotPriority"`
+	ReliableRetryInterval     string  `json:"reliableRetryInterval"`
+	ReliableRetryIntervalMs   float64 `json:"reliableRetryIntervalMs"`
+	ReliableMaxAttempts       int     `json:"reliableMaxAttempts"`
+	ReliableQueueLimit        int     `json:"reliableQueueLimit"`
+	MaxInputFutureTicks       uint64  `json:"maxInputFutureTicks"`
+	MaxInputPastTicks         uint64  `json:"maxInputPastTicks"`
+	InputBufferLimit          int     `json:"inputBufferLimit"`
+	DebugEnabled              bool    `json:"debugEnabled"`
+	DebugAddress              string  `json:"debugAddress"`
+	DebugURL                  string  `json:"debugUrl"`
 }
 
 // DebugRuntimeState contains object, factory, and authentication state for debugging.
@@ -183,21 +188,27 @@ type DebugUDPCounters struct {
 	ReliableRetransmits uint64 `json:"reliableRetransmits"`
 	ReliableDrops       uint64 `json:"reliableDrops"`
 	ReliableAckRemovals uint64 `json:"reliableAckRemovals"`
+	BudgetDrops         uint64 `json:"bandwidthBudgetDrops"`
+	BudgetDeferrals     uint64 `json:"bandwidthBudgetDeferrals"`
+	OutboundBytesSent   uint64 `json:"outboundBytesSent"`
 	ClientsCreated      uint64 `json:"clientsCreated"`
 	ClientsRemoved      uint64 `json:"clientsRemoved"`
 }
 
 // DebugUDPClient describes a known UDP client.
 type DebugUDPClient struct {
-	Address        string    `json:"address"`
-	ConnectionID   string    `json:"connectionId"`
-	ID             string    `json:"id"`
-	Authenticated  bool      `json:"authenticated"`
-	LastSequence   uint64    `json:"lastSeq"`
-	ReliableQueued int       `json:"reliableQueued"`
-	LastHeardAt    time.Time `json:"lastHeardAt"`
-	Idle           string    `json:"idle"`
-	IdleSeconds    float64   `json:"idleSeconds"`
+	Address         string    `json:"address"`
+	ConnectionID    string    `json:"connectionId"`
+	ID              string    `json:"id"`
+	Authenticated   bool      `json:"authenticated"`
+	LastSequence    uint64    `json:"lastSeq"`
+	ReliableQueued  int       `json:"reliableQueued"`
+	BudgetDrops     uint64    `json:"bandwidthBudgetDrops"`
+	BudgetDeferrals uint64    `json:"bandwidthBudgetDeferrals"`
+	BytesSent       uint64    `json:"bytesSent"`
+	LastHeardAt     time.Time `json:"lastHeardAt"`
+	Idle            string    `json:"idle"`
+	IdleSeconds     float64   `json:"idleSeconds"`
 }
 
 // ListenAndServeDebug starts the browser debug interface.
@@ -345,15 +356,18 @@ func (server *UDPServer) DebugState() DebugUDPState {
 			authenticatedClients++
 		}
 		clients = append(clients, DebugUDPClient{
-			Address:        client.addr.String(),
-			ConnectionID:   client.connectionID,
-			ID:             client.id,
-			Authenticated:  client.authenticated,
-			LastSequence:   client.lastSeq,
-			ReliableQueued: len(client.reliableOut),
-			LastHeardAt:    client.lastHeardAt,
-			Idle:           idle.Truncate(time.Millisecond).String(),
-			IdleSeconds:    idle.Seconds(),
+			Address:         client.addr.String(),
+			ConnectionID:    client.connectionID,
+			ID:              client.id,
+			Authenticated:   client.authenticated,
+			LastSequence:    client.lastSeq,
+			ReliableQueued:  len(client.reliableOut),
+			BudgetDrops:     client.budgetDrops,
+			BudgetDeferrals: client.budgetDeferrals,
+			BytesSent:       client.bytesSent,
+			LastHeardAt:     client.lastHeardAt,
+			Idle:            idle.Truncate(time.Millisecond).String(),
+			IdleSeconds:     idle.Seconds(),
 		})
 	}
 	sort.Slice(clients, func(i, j int) bool {
@@ -387,6 +401,9 @@ func (server *UDPServer) DebugState() DebugUDPState {
 			ReliableRetransmits: server.reliableRetransmits,
 			ReliableDrops:       server.reliableDrops,
 			ReliableAckRemovals: server.reliableAckRemovals,
+			BudgetDrops:         server.budgetDrops,
+			BudgetDeferrals:     server.budgetDeferrals,
+			OutboundBytesSent:   server.outboundBytesSent,
 			ClientsCreated:      server.clientsCreated,
 			ClientsRemoved:      server.clientsRemoved,
 		},
@@ -399,27 +416,32 @@ func debugConfigState(config Config) DebugConfigState {
 	config = config.Normalized()
 	tickInterval := config.TickInterval()
 	return DebugConfigState{
-		UDPAddress:              config.UDPAddress,
-		TickRate:                config.TickRate,
-		TickInterval:            tickInterval.String(),
-		TickIntervalMs:          float64(tickInterval) / float64(time.Millisecond),
-		SnapshotRate:            config.SnapshotRate,
-		SnapshotEvery:           config.SnapshotEvery(),
-		EnableDeltaSnapshots:    config.EnableDeltaSnapshots,
-		FullSnapshotInterval:    config.FullSnapshotInterval,
-		ClientTimeout:           config.ClientTimeout.String(),
-		ClientTimeoutMs:         int64(config.ClientTimeout / time.Millisecond),
-		MaxUDPPacketSize:        config.MaxUDPPacketSize,
-		ReliableRetryInterval:   config.ReliableRetryInterval.String(),
-		ReliableRetryIntervalMs: float64(config.ReliableRetryInterval) / float64(time.Millisecond),
-		ReliableMaxAttempts:     config.ReliableMaxAttempts,
-		ReliableQueueLimit:      config.ReliableQueueLimit,
-		MaxInputFutureTicks:     config.MaxInputFutureTicks,
-		MaxInputPastTicks:       config.MaxInputPastTicks,
-		InputBufferLimit:        config.InputBufferLimit,
-		DebugEnabled:            config.DebugEnabled,
-		DebugAddress:            config.DebugAddress,
-		DebugURL:                debugHTTPURL(config.DebugAddress),
+		UDPAddress:                config.UDPAddress,
+		TickRate:                  config.TickRate,
+		TickInterval:              tickInterval.String(),
+		TickIntervalMs:            float64(tickInterval) / float64(time.Millisecond),
+		SnapshotRate:              config.SnapshotRate,
+		SnapshotEvery:             config.SnapshotEvery(),
+		EnableDeltaSnapshots:      config.EnableDeltaSnapshots,
+		SupportedWireCapabilities: config.SupportedWireCapabilities,
+		FullSnapshotInterval:      config.FullSnapshotInterval,
+		ClientTimeout:             config.ClientTimeout.String(),
+		ClientTimeoutMs:           int64(config.ClientTimeout / time.Millisecond),
+		MaxClients:                config.MaxClients,
+		MaxUDPPacketSize:          config.MaxUDPPacketSize,
+		EnableBandwidthBudget:     config.EnableBandwidthBudget,
+		ClientBytesPerSecond:      config.ClientBytesPerSecond,
+		DefaultSnapshotPriority:   int(config.DefaultSnapshotPriority),
+		ReliableRetryInterval:     config.ReliableRetryInterval.String(),
+		ReliableRetryIntervalMs:   float64(config.ReliableRetryInterval) / float64(time.Millisecond),
+		ReliableMaxAttempts:       config.ReliableMaxAttempts,
+		ReliableQueueLimit:        config.ReliableQueueLimit,
+		MaxInputFutureTicks:       config.MaxInputFutureTicks,
+		MaxInputPastTicks:         config.MaxInputPastTicks,
+		InputBufferLimit:          config.InputBufferLimit,
+		DebugEnabled:              config.DebugEnabled,
+		DebugAddress:              config.DebugAddress,
+		DebugURL:                  debugHTTPURL(config.DebugAddress),
 	}
 }
 

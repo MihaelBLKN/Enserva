@@ -52,13 +52,14 @@ flowchart TD
 3. Optional authentication object is registered.
 4. `ListenAndServe` starts the UDP listener.
 5. A goroutine advances runtime ticks at `Config.TickInterval()`.
-6. UDP datagrams are decoded as binary wire packets first when they carry the `ES` magic value; legacy JSON requests remain a compatibility path.
-7. Authentication messages go to the authentication object.
-8. Regular object requests route to existing objects by `objectType` and `objectId`.
-9. Reliable wire messages are deduplicated, ordered when requested, and tracked for retries when sent.
-10. Tick-aligned client inputs are validated against the configured past/future windows and buffered by client ID and target tick.
-11. Immediate responses and snapshots are serialized as wire or JSON payloads and checked against `Config.MaxUDPPacketSize` before `WriteToUDP`.
-12. Snapshots are broadcast every `Config.SnapshotEvery()` ticks.
+6. New UDP client addresses are accepted while under `Config.MaxClients`, or without a cap when `MaxClients` is `0`.
+7. UDP datagrams are decoded as binary wire packets first when they carry the `ES` magic value; legacy JSON requests remain a compatibility path.
+8. Authentication messages go to the authentication object.
+9. Regular object requests route to existing objects by `objectType` and `objectId`.
+10. Reliable wire messages are deduplicated, ordered when requested, and tracked for retries when sent.
+11. Tick-aligned client inputs are validated against the configured past/future windows and buffered by client ID and target tick.
+12. Immediate responses and snapshots are serialized as wire or JSON payloads, checked against `Config.MaxUDPPacketSize`, and optionally charged against each client's outbound byte budget before `WriteToUDP`.
+13. Snapshots are broadcast every `Config.SnapshotEvery()` ticks.
 
 ## Request Routing
 
@@ -119,6 +120,8 @@ flowchart LR
 
 Full snapshots remain the default. When `Config.EnableDeltaSnapshots` is true, UDP keeps a per-client baseline of the previously sent visible snapshot. Deltas are computed from already-filtered snapshots, so snapshot visibility, scene membership, and interest management are applied before diffing. A full snapshot is forced when a client has no baseline, when the configured `FullSnapshotInterval` cycle expires, after authentication changes a client identity, after scene-switch handling, after a client changes protocol mode, or after a disconnected client reconnects.
 
+When outbound bandwidth budgeting is enabled, the UDP transport treats snapshots as deferrable traffic. It sorts snapshot object updates by generic `OutboundPriority`, omits lower-priority objects first when a packet would exceed the remaining client budget or negotiated MTU, and commits the filtered snapshot as that client's baseline so omitted objects can be sent in a later delta or full snapshot.
+
 ## Object Identity
 
 Objects are addressed by `(ObjectType, ObjectID)`. The runtime trims whitespace and rejects empty values. Object replacement is allowed through `RegisterObject`. Controlled creation through `CreateObject` rejects duplicates.
@@ -178,6 +181,8 @@ The current reliable queue is transport-internal. It covers wire messages sent t
 
 The UDP server also has its own mutex for the client map and transport counters.
 
+`Config.MaxClients` limits how many UDP client addresses the transport tracks at once. Existing clients can continue sending datagrams, while new addresses are dropped after the cap is reached. The default `0` means no built-in client limit.
+
 !!! note
 Hook serialization means object callbacks are not called concurrently by the runtime. Object code can still call back into runtime methods, but long-running hooks will delay ticks, requests, authentication, and snapshots.
 
@@ -186,6 +191,12 @@ Hook serialization means object callbacks are not called concurrently by the run
 `Config.MaxUDPPacketSize` bounds the serialized UDP payload sent by the built-in transport. The default is 1200 bytes, which is a conservative MTU-safe value for internet UDP traffic. The transport enforces the limit for both binary wire packets and legacy JSON packets after serialization and before `WriteToUDP`.
 
 Oversized immediate responses return `ErrUDPPacketTooLarge` to the caller that attempted the response. Oversized snapshots are skipped for that client on that tick. Both cases increment the UDP debug counter for oversized outbound packet drops and write a log entry with the packet kind, destination, actual size, and configured limit.
+
+## Outbound Budget Model
+
+`Config.EnableBandwidthBudget` adds a per-client token bucket refilled at `ClientBytesPerSecond` bytes per second. The bucket capacity is the same value, so clients can burst up to one second of budget. Immediate protocol responses, snapshots, and reliable retransmits all reserve bytes before writing.
+
+Traffic has generic priority metadata. Built-in protocol responses use high or essential priority, application responses can use `network.Prioritize*` wrappers, and snapshot objects can implement `SnapshotPriorityProvider`. When budget is exhausted, non-deferrable lower-priority responses are dropped, while snapshots and reliable retransmits are deferred. Budget counters are exposed through the UDP debug state.
 
 ## Extension Points
 

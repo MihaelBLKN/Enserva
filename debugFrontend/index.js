@@ -131,6 +131,9 @@ function renderConfig(config) {
     ["Snapshot every", config.snapshotEvery + " ticks"],
     ["Client timeout", config.clientTimeout],
     ["Max UDP packet", number(config.maxUdpPacketSize) + " bytes"],
+    ["Bandwidth budget", config.enableBandwidthBudget ? "enabled" : "disabled"],
+    ["Client byte budget", number(config.clientBytesPerSecond) + " bytes/s"],
+    ["Snapshot priority", number(config.defaultSnapshotPriority)],
     ["Debug enabled", config.debugEnabled],
     ["Debug address", config.debugAddress],
     ["Debug URL", config.debugUrl]

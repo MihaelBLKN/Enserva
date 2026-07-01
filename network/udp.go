@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +34,9 @@ type UDPServer struct {
 	reliableRetransmits uint64
 	reliableDrops       uint64
 	reliableAckRemovals uint64
+	budgetDrops         uint64
+	budgetDeferrals     uint64
+	outboundBytesSent   uint64
 	clientsCreated      uint64
 	clientsRemoved      uint64
 	nextSequence        uint64
@@ -47,7 +51,10 @@ type UDPClient struct {
 	id                        string
 	authenticated             bool
 	wireProtocol              bool
+	wireNegotiated            bool
 	wireVersion               uint8
+	wireCapabilities          WireCapabilities
+	maxPacketSize             int
 	lastSeq                   uint64
 	receivedSeqs              map[uint64]struct{}
 	peerAck                   uint64
@@ -61,6 +68,11 @@ type UDPClient struct {
 	reliableOrderedReceived   map[uint64]struct{}
 	reliableOrderedNext       uint64
 	reliableOrderedBuffer     map[uint64]udpIncomingMessage
+	budgetAvailable           float64
+	budgetLastRefill          time.Time
+	budgetDrops               uint64
+	budgetDeferrals           uint64
+	bytesSent                 uint64
 }
 
 type udpSnapshotBaseline struct {
@@ -94,6 +106,7 @@ type udpReliableOutbound struct {
 }
 
 type udpReliableTransmit struct {
+	client  *UDPClient
 	addr    *net.UDPAddr
 	payload []byte
 }
@@ -153,7 +166,7 @@ func (server *UDPServer) handleMessage(conn *net.UDPConn, addr *net.UDPAddr, mes
 		return nil
 	}
 	if incoming.wire {
-		server.markWireClient(client, incoming.version)
+		server.markWireClient(client)
 	}
 
 	response := ResponseWriterFunc(func(responseMessage any) error {
@@ -259,6 +272,23 @@ func (server *UDPServer) handleDecodedRequest(client *UDPClient, request Request
 // handleAuthenticationAttempt authenticates a client and sends the transport response.
 func (server *UDPServer) handleAuthenticationAttempt(client *UDPClient, request RequestMessage, payload any, response ResponseWriter) error {
 	server.recordAuthAttempt()
+	if hello, ok := payload.(ClientHello); ok {
+		welcome, err := NegotiateClientHello(server.runtime.Config(), hello)
+		if err != nil {
+			server.recordAuthFailure()
+			_ = response.Respond(ResponseMessage{
+				Type:     "error",
+				Sequence: request.Sequence,
+				OK:       false,
+				Error:    err.Error(),
+			})
+			return err
+		}
+		if hello.MaxPacketSize > 0 {
+			server.applyClientPacketSize(client, hello.MaxPacketSize)
+		}
+		server.applyNegotiatedWireState(client, welcome)
+	}
 
 	authenticatedID, err := server.runtime.HandleAuthenticationAttempt(AuthenticationContext{
 		Transport:    "udp",
@@ -424,20 +454,27 @@ func isWirePacket(payload []byte) bool {
 }
 
 func (server *UDPServer) sendUDPResponse(conn *net.UDPConn, addr *net.UDPAddr, client *UDPClient, message any, wire bool) error {
+	priority := server.outboundMessagePriority(message)
 	if !wire {
 		sequence := server.nextOutgoingSequence()
 		payload, err := server.encodeUDPResponse(message, sequence, 0, 0, false)
 		if err != nil {
 			return err
 		}
-		if err := server.validateOutboundPacket("response", addr, payload); err != nil {
+		if err := server.validateOutboundPacket("response", client, addr, payload); err != nil {
 			return err
 		}
+		if !server.reserveOutboundBudget(client, len(payload), priority, false, time.Now()) {
+			return nil
+		}
 		_, err = conn.WriteToUDP(payload, addr)
+		if err == nil {
+			server.recordOutboundBytes(client, len(payload))
+		}
 		return err
 	}
 
-	wireMessage, err := server.encodeUDPWireResponseMessage(message)
+	wireMessage, err := server.encodeUDPWireResponseMessage(client, message)
 	if err != nil {
 		return err
 	}
@@ -451,8 +488,11 @@ func (server *UDPServer) sendUDPResponse(conn *net.UDPConn, addr *net.UDPAddr, c
 	if err != nil {
 		return err
 	}
-	if err := server.validateOutboundPacket("response", addr, payload); err != nil {
+	if err := server.validateOutboundPacket("response", client, addr, payload); err != nil {
 		return err
+	}
+	if !server.reserveOutboundBudget(client, len(payload), priority, false, time.Now()) {
+		return nil
 	}
 	if wireMessage.Delivery.reliable() {
 		if err := server.queueReliableOutbound(client, wireMessage, sequence, time.Now()); err != nil {
@@ -460,33 +500,57 @@ func (server *UDPServer) sendUDPResponse(conn *net.UDPConn, addr *net.UDPAddr, c
 		}
 	}
 	_, err = conn.WriteToUDP(payload, addr)
+	if err == nil {
+		server.recordOutboundBytes(client, len(payload))
+	}
 	return err
 }
 
 func (server *UDPServer) encodeUDPResponse(message any, sequence, ack, ackBits uint64, wire bool) ([]byte, error) {
+	if priority, ok := message.(WirePriority); ok {
+		return server.encodeUDPResponse(priority.Message, sequence, ack, ackBits, wire)
+	}
 	if !wire {
 		return json.Marshal(message)
 	}
 
-	wireMessage, err := server.encodeUDPWireResponseMessage(message)
+	wireMessage, err := server.encodeUDPWireResponseMessage(nil, message)
 	if err != nil {
 		return nil, err
 	}
 	return EncodePacketWithAcks(sequence, ack, ackBits, []WireMessage{wireMessage})
 }
 
-func (server *UDPServer) encodeUDPWireResponseMessage(message any) (WireMessage, error) {
+func (server *UDPServer) encodeUDPWireResponseMessage(client *UDPClient, message any) (WireMessage, error) {
+	if priority, ok := message.(WirePriority); ok {
+		return server.encodeUDPWireResponseMessage(client, priority.Message)
+	}
 	if delivery, ok := message.(WireDelivery); ok {
-		wireMessage, err := server.encodeUDPWireResponseMessage(delivery.Message)
+		wireMessage, err := server.encodeUDPWireResponseMessage(client, delivery.Message)
 		if err != nil {
 			return WireMessage{}, err
 		}
 		wireMessage.Delivery = delivery.Class
+		if client != nil && !server.clientSupportsReliable(client, delivery.Class) {
+			wireMessage.Delivery = DeliveryUnreliable
+		}
 		return wireMessage, nil
 	}
 
 	switch value := message.(type) {
 	case AuthenticationResponse:
+		if client != nil {
+			defaultPacketSize := server.runtime.Config().MaxUDPPacketSize
+			if client.wireNegotiated || client.maxPacketSize > 0 && client.maxPacketSize != defaultPacketSize {
+				return server.runtime.WireMessages().EncodeMessage(Welcome{
+					ClientID:        value.ClientID,
+					AuthenticatedID: value.AuthenticatedID,
+					ProtocolVersion: client.wireVersion,
+					Capabilities:    client.wireCapabilities,
+					MaxPacketSize:   uint32(server.negotiatedMaxPacketSize(client)),
+				})
+			}
+		}
 		return server.runtime.WireMessages().EncodeMessage(Welcome{
 			ClientID:        value.ClientID,
 			AuthenticatedID: value.AuthenticatedID,
@@ -501,8 +565,11 @@ func (server *UDPServer) encodeUDPWireResponseMessage(message any) (WireMessage,
 	}
 }
 
-func (server *UDPServer) validateOutboundPacket(kind string, addr *net.UDPAddr, payload []byte) error {
+func (server *UDPServer) validateOutboundPacket(kind string, client *UDPClient, addr *net.UDPAddr, payload []byte) error {
 	limit := server.runtime.Config().MaxUDPPacketSize
+	if negotiated := server.negotiatedMaxPacketSize(client); negotiated > 0 && negotiated < limit {
+		limit = negotiated
+	}
 	if len(payload) <= limit {
 		return nil
 	}
@@ -514,6 +581,227 @@ func (server *UDPServer) validateOutboundPacket(kind string, addr *net.UDPAddr, 
 	}
 	log.Printf("udp %s dropped oversized outbound packet to %s: %d bytes exceeds max %d", kind, target, len(payload), limit)
 	return fmt.Errorf("%w: %d bytes exceeds max %d", ErrUDPPacketTooLarge, len(payload), limit)
+}
+
+func (server *UDPServer) outboundBudgetLimit(client UDPClient, now time.Time) (int, bool) {
+	config := server.runtime.Config()
+	if !config.EnableBandwidthBudget {
+		return 0, false
+	}
+
+	server.mu.Lock()
+	defer server.mu.Unlock()
+
+	live := server.clientByAddressLocked(client.addr)
+	if live == nil {
+		return 0, true
+	}
+	server.refillClientBudgetLocked(live, now, config)
+	if live.budgetAvailable <= 0 {
+		return 0, true
+	}
+	return int(live.budgetAvailable), true
+}
+
+func (server *UDPServer) reserveOutboundBudget(client *UDPClient, bytes int, priority OutboundPriority, deferrable bool, now time.Time) bool {
+	if bytes <= 0 {
+		return true
+	}
+	config := server.runtime.Config()
+	if !config.EnableBandwidthBudget {
+		return true
+	}
+
+	server.mu.Lock()
+	defer server.mu.Unlock()
+
+	live := server.clientByAddressLocked(clientAddr(client))
+	if live == nil {
+		return false
+	}
+	server.refillClientBudgetLocked(live, now, config)
+	if live.budgetAvailable >= float64(bytes) {
+		live.budgetAvailable -= float64(bytes)
+		return true
+	}
+
+	if deferrable {
+		server.budgetDeferrals++
+		live.budgetDeferrals++
+	} else {
+		server.budgetDrops++
+		live.budgetDrops++
+	}
+	_ = priority
+	return false
+}
+
+func (server *UDPServer) refillClientBudgetLocked(client *UDPClient, now time.Time, config Config) {
+	if client == nil || !config.EnableBandwidthBudget {
+		return
+	}
+	capacity := float64(config.ClientBytesPerSecond)
+	if capacity <= 0 {
+		client.budgetAvailable = 0
+		client.budgetLastRefill = now
+		return
+	}
+	if client.budgetLastRefill.IsZero() {
+		client.budgetAvailable = capacity
+		client.budgetLastRefill = now
+		return
+	}
+	if now.Before(client.budgetLastRefill) {
+		client.budgetLastRefill = now
+		return
+	}
+	elapsed := now.Sub(client.budgetLastRefill).Seconds()
+	client.budgetAvailable += elapsed * capacity
+	if client.budgetAvailable > capacity {
+		client.budgetAvailable = capacity
+	}
+	client.budgetLastRefill = now
+}
+
+func (server *UDPServer) clientByAddressLocked(addr *net.UDPAddr) *UDPClient {
+	if addr == nil {
+		return nil
+	}
+	return server.clients[addr.String()]
+}
+
+func clientAddr(client *UDPClient) *net.UDPAddr {
+	if client == nil {
+		return nil
+	}
+	return client.addr
+}
+
+func (server *UDPServer) recordOutboundBytes(client *UDPClient, bytes int) {
+	if client == nil || bytes <= 0 {
+		return
+	}
+
+	server.mu.Lock()
+	defer server.mu.Unlock()
+
+	live := server.clientByAddressLocked(client.addr)
+	if live != nil {
+		live.bytesSent += uint64(bytes)
+	}
+	server.outboundBytesSent += uint64(bytes)
+}
+
+func (server *UDPServer) recordBudgetDeferral(client *UDPClient) {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+
+	if live := server.clientByAddressLocked(clientAddr(client)); live != nil {
+		live.budgetDeferrals++
+	}
+	server.budgetDeferrals++
+}
+
+func (server *UDPServer) recordSnapshotDeferrals(client *UDPClient, count uint64) {
+	if count == 0 {
+		return
+	}
+	server.mu.Lock()
+	defer server.mu.Unlock()
+
+	if live := server.clientByAddressLocked(clientAddr(client)); live != nil {
+		live.budgetDeferrals += count
+	}
+	server.budgetDeferrals += count
+}
+
+func (server *UDPServer) outboundMessagePriority(message any) OutboundPriority {
+	switch value := message.(type) {
+	case WirePriority:
+		return value.Priority
+	case WireDelivery:
+		return server.outboundMessagePriority(value.Message)
+	case AuthenticationResponse, Welcome, ErrorMessage, DisconnectMessage:
+		return OutboundPriorityEssential
+	case Pong:
+		return OutboundPriorityHigh
+	case ResponseMessage:
+		if !value.OK {
+			return OutboundPriorityEssential
+		}
+		return OutboundPriorityHigh
+	default:
+		return OutboundPriorityNormal
+	}
+}
+
+func (server *UDPServer) applyNegotiatedWireState(client *UDPClient, welcome Welcome) {
+	if client == nil {
+		return
+	}
+
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	client.wireNegotiated = welcome.ProtocolVersion != 0 || welcome.Capabilities != 0
+
+	if welcome.ProtocolVersion != 0 {
+		client.wireVersion = welcome.ProtocolVersion
+	}
+	if client.wireNegotiated {
+		client.wireCapabilities = welcome.Capabilities
+	}
+	if welcome.MaxPacketSize > 0 {
+		client.maxPacketSize = int(welcome.MaxPacketSize)
+	}
+}
+
+func (server *UDPServer) applyClientPacketSize(client *UDPClient, packetSize uint32) {
+	if client == nil || packetSize == 0 {
+		return
+	}
+
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	limit := server.runtime.Config().MaxUDPPacketSize
+	if packetSize < uint32(limit) {
+		client.maxPacketSize = int(packetSize)
+		return
+	}
+	client.maxPacketSize = limit
+}
+
+func (server *UDPServer) negotiatedMaxPacketSize(client *UDPClient) int {
+	if client == nil || client.maxPacketSize <= 0 {
+		return server.runtime.Config().MaxUDPPacketSize
+	}
+	serverLimit := server.runtime.Config().MaxUDPPacketSize
+	if client.maxPacketSize < serverLimit {
+		return client.maxPacketSize
+	}
+	return serverLimit
+}
+
+func (server *UDPServer) clientSupportsReliable(client *UDPClient, class DeliveryClass) bool {
+	if client == nil || !class.reliable() {
+		return true
+	}
+	if !client.wireNegotiated {
+		return true
+	}
+	if client.wireCapabilities&WireCapabilityReliableOrdered != 0 && class == DeliveryReliableOrdered {
+		return true
+	}
+	if client.wireCapabilities&WireCapabilityReliableUnordered != 0 && class == DeliveryReliableUnordered {
+		return true
+	}
+	return false
+}
+
+func (server *UDPServer) clientSupportsDeltaSnapshots(client *UDPClient) bool {
+	if client == nil || !client.wireNegotiated {
+		return true
+	}
+	return client.wireCapabilities&WireCapabilityDeltaSnapshots != 0
 }
 
 // authenticateClient assigns an authenticated id if no other client owns it.
@@ -543,7 +831,13 @@ func (server *UDPServer) acceptClientRequest(addr *net.UDPAddr, sequence, ack, a
 	server.mu.Lock()
 	defer server.mu.Unlock()
 
-	client := server.getOrCreateClientLocked(addr)
+	client := server.clientByAddressLocked(addr)
+	if client == nil && server.runtime.Config().MaxClients > 0 && len(server.clients) >= server.runtime.Config().MaxClients {
+		server.requestsDropped++
+		return nil, false
+	}
+
+	client = server.getOrCreateClientLocked(addr)
 	client.lastHeardAt = time.Now()
 	client.peerAck = ack
 	client.peerAckBits = ackBits
@@ -594,6 +888,11 @@ func (server *UDPServer) clientAckState(client *UDPClient) (uint64, uint64) {
 
 func (server *UDPServer) prepareReliableMessage(client *UDPClient, message *WireMessage) error {
 	if client == nil || message == nil || !message.Delivery.reliable() {
+		return nil
+	}
+	if !server.clientSupportsReliable(client, message.Delivery) {
+		message.Delivery = DeliveryUnreliable
+		message.DeliveryID = 0
 		return nil
 	}
 
@@ -658,13 +957,18 @@ func (server *UDPServer) retransmitReliable(conn *net.UDPConn, now time.Time) {
 	}
 
 	for _, transmit := range server.collectReliableRetransmits(now) {
-		if err := server.validateOutboundPacket("reliable retry", transmit.addr, transmit.payload); err != nil {
+		if err := server.validateOutboundPacket("reliable retry", transmit.client, transmit.addr, transmit.payload); err != nil {
 			server.recordReliableDrop()
+			continue
+		}
+		if !server.reserveOutboundBudget(transmit.client, len(transmit.payload), OutboundPriorityHigh, true, now) {
 			continue
 		}
 		if _, err := conn.WriteToUDP(transmit.payload, transmit.addr); err != nil {
 			server.recordReliableDrop()
 			log.Println("udp reliable retry error:", err)
+		} else {
+			server.recordOutboundBytes(transmit.client, len(transmit.payload))
 		}
 	}
 }
@@ -698,6 +1002,7 @@ func (server *UDPServer) collectReliableRetransmits(now time.Time) []udpReliable
 			queued.sentSequences[sequence] = struct{}{}
 			server.reliableRetransmits++
 			transmits = append(transmits, udpReliableTransmit{
+				client:  client,
 				addr:    client.addr,
 				payload: payload,
 			})
@@ -720,6 +1025,10 @@ func (server *UDPServer) acceptReliableIncomingMessages(client *UDPClient, messa
 		case DeliveryUnreliable:
 			accepted = append(accepted, message)
 		case DeliveryReliableUnordered:
+			if !server.clientSupportsReliable(client, message.delivery) {
+				server.reliableDrops++
+				continue
+			}
 			if message.deliveryID == 0 {
 				server.reliableDrops++
 				continue
@@ -731,6 +1040,10 @@ func (server *UDPServer) acceptReliableIncomingMessages(client *UDPClient, messa
 			client.reliableUnorderedReceived[message.deliveryID] = struct{}{}
 			accepted = append(accepted, message)
 		case DeliveryReliableOrdered:
+			if !server.clientSupportsReliable(client, message.delivery) {
+				server.reliableDrops++
+				continue
+			}
 			if message.deliveryID == 0 {
 				server.reliableDrops++
 				continue
@@ -803,7 +1116,7 @@ func pruneClientReceivedSeqsLocked(client *UDPClient) {
 	}
 }
 
-func (server *UDPServer) markWireClient(client *UDPClient, version uint8) {
+func (server *UDPServer) markWireClient(client *UDPClient) {
 	server.mu.Lock()
 	defer server.mu.Unlock()
 
@@ -811,7 +1124,15 @@ func (server *UDPServer) markWireClient(client *UDPClient, version uint8) {
 		delete(server.snapshotBaselines, client.connectionID)
 	}
 	client.wireProtocol = true
-	client.wireVersion = version
+	if client.wireCapabilities == 0 {
+		client.wireCapabilities = DefaultWireCapabilities()
+	}
+	if client.wireVersion == 0 {
+		client.wireVersion = WireProtocolVersion
+	}
+	if client.maxPacketSize == 0 {
+		client.maxPacketSize = server.runtime.Config().MaxUDPPacketSize
+	}
 }
 
 // getOrCreateClientLocked returns the client for addr while server.mu is held.
@@ -833,6 +1154,12 @@ func (server *UDPServer) getOrCreateClientLocked(addr *net.UDPAddr) *UDPClient {
 		reliableOrderedReceived:   map[uint64]struct{}{},
 		reliableOrderedNext:       1,
 		reliableOrderedBuffer:     map[uint64]udpIncomingMessage{},
+		maxPacketSize:             server.runtime.Config().MaxUDPPacketSize,
+	}
+	config := server.runtime.Config()
+	if config.EnableBandwidthBudget {
+		client.budgetAvailable = float64(config.ClientBytesPerSecond)
+		client.budgetLastRefill = time.Now()
 	}
 	server.clients[key] = client
 	server.clientsCreated++
@@ -874,6 +1201,7 @@ func (server *UDPServer) advanceAndMaybeBroadcast(conn *net.UDPConn) error {
 			log.Println("udp broadcast error:", err)
 			continue
 		}
+		server.recordOutboundBytes(&snapshot.client, len(snapshot.payload))
 		server.recordSnapshotSent(snapshot.kind)
 	}
 
@@ -884,43 +1212,188 @@ type udpSnapshot struct {
 	addr    *net.UDPAddr
 	payload []byte
 	kind    string
+	client  UDPClient
 }
 
 // snapshots builds one serialized snapshot per eligible client.
 func (server *UDPServer) snapshots() ([]udpSnapshot, error) {
 	tick := server.runtime.Tick()
 	clients := server.snapshotClients()
+	now := time.Now()
 
 	snapshots := make([]udpSnapshot, 0, len(clients))
 	for _, client := range clients {
 		objects := server.runtime.SnapshotForClient(client.id)
 		sequence := server.nextOutgoingSequence()
-		payload, kind, err := server.encodeUDPSnapshot(client, sequence, tick, objects)
+		payload, kind, filteredObjects, err := server.encodeBudgetedUDPSnapshot(client, sequence, tick, objects, now)
 		if err != nil {
 			return nil, err
 		}
-		if err := server.validateOutboundPacket("snapshot", client.addr, payload); err != nil {
+		if len(payload) == 0 {
+			continue
+		}
+		if err := server.validateOutboundPacket("snapshot", &client, client.addr, payload); err != nil {
 			if errors.Is(err, ErrUDPPacketTooLarge) {
 				continue
 			}
 			return nil, err
 		}
 
-		server.commitSnapshotBaseline(client, tick, objects, kind)
+		server.commitSnapshotBaseline(client, tick, filteredObjects, kind)
 		snapshots = append(snapshots, udpSnapshot{
 			addr:    client.addr,
 			payload: payload,
 			kind:    kind,
+			client:  client,
 		})
 	}
 
 	return snapshots, nil
 }
 
+func (server *UDPServer) encodeBudgetedUDPSnapshot(client UDPClient, sequence, tick uint64, objects SnapshotData, now time.Time) ([]byte, string, SnapshotData, error) {
+	payload, kind, err := server.encodeUDPSnapshot(client, sequence, tick, objects)
+	if err != nil {
+		return nil, "", nil, err
+	}
+
+	budgetLimit, budgeting := server.outboundBudgetLimit(client, now)
+	if !budgeting {
+		return payload, kind, objects, nil
+	}
+
+	limit := server.negotiatedMaxPacketSize(&client)
+	if budgetLimit < limit {
+		limit = budgetLimit
+	}
+	if len(payload) <= limit {
+		if !server.reserveOutboundBudget(&client, len(payload), server.runtime.Config().DefaultSnapshotPriority, true, now) {
+			return nil, "", nil, nil
+		}
+		return payload, kind, objects, nil
+	}
+
+	filtered := server.filterSnapshotForLimit(client, sequence, tick, objects, limit)
+	if filtered.dropped == 0 {
+		if len(payload) > server.negotiatedMaxPacketSize(&client) {
+			server.recordOversizedOutbound()
+		} else {
+			server.recordBudgetDeferral(&client)
+		}
+		return nil, "", nil, nil
+	}
+	if filtered.payload == nil {
+		return nil, "", nil, filtered.err
+	}
+	if !server.reserveOutboundBudget(&client, len(filtered.payload), server.runtime.Config().DefaultSnapshotPriority, true, now) {
+		return nil, "", nil, nil
+	}
+	server.recordSnapshotDeferrals(&client, uint64(filtered.dropped))
+	return filtered.payload, filtered.kind, filtered.objects, nil
+}
+
+type udpFilteredSnapshot struct {
+	payload []byte
+	kind    string
+	objects SnapshotData
+	dropped int
+	err     error
+}
+
+func (server *UDPServer) filterSnapshotForLimit(client UDPClient, sequence, tick uint64, objects SnapshotData, limit int) udpFilteredSnapshot {
+	if limit <= 0 {
+		return udpFilteredSnapshot{}
+	}
+
+	filtered := CloneSnapshotData(objects)
+	candidates := server.snapshotDropCandidates(objects)
+	dropped := 0
+	for _, candidate := range candidates {
+		removeSnapshotObject(filtered, candidate.objectType, candidate.objectID)
+		dropped++
+		payload, kind, err := server.encodeUDPSnapshot(client, sequence, tick, filtered)
+		if err != nil {
+			return udpFilteredSnapshot{err: err}
+		}
+		if len(payload) <= limit {
+			return udpFilteredSnapshot{
+				payload: payload,
+				kind:    kind,
+				objects: filtered,
+				dropped: dropped,
+			}
+		}
+	}
+
+	payload, kind, err := server.encodeUDPSnapshot(client, sequence, tick, filtered)
+	if err != nil {
+		return udpFilteredSnapshot{err: err}
+	}
+	if len(payload) <= limit {
+		return udpFilteredSnapshot{
+			payload: payload,
+			kind:    kind,
+			objects: filtered,
+			dropped: dropped,
+		}
+	}
+	return udpFilteredSnapshot{dropped: dropped}
+}
+
+type udpSnapshotDropCandidate struct {
+	objectType string
+	objectID   string
+	priority   OutboundPriority
+}
+
+func (server *UDPServer) snapshotDropCandidates(objects SnapshotData) []udpSnapshotDropCandidate {
+	priorities := server.runtime.SnapshotPriorities(objects)
+	defaultPriority := server.runtime.Config().DefaultSnapshotPriority
+	candidates := make([]udpSnapshotDropCandidate, 0)
+	for objectType, objectsByID := range objects {
+		for objectID := range objectsByID {
+			priority, ok := priorities[snapshotPriorityKey(objectType, objectID)]
+			if !ok {
+				priority = defaultPriority
+			}
+			candidates = append(candidates, udpSnapshotDropCandidate{
+				objectType: objectType,
+				objectID:   objectID,
+				priority:   priority,
+			})
+		}
+	}
+	sort.Slice(candidates, func(left, right int) bool {
+		if candidates[left].priority == candidates[right].priority {
+			if candidates[left].objectType == candidates[right].objectType {
+				return candidates[left].objectID > candidates[right].objectID
+			}
+			return candidates[left].objectType > candidates[right].objectType
+		}
+		return candidates[left].priority < candidates[right].priority
+	})
+	return candidates
+}
+
+func removeSnapshotObject(snapshot SnapshotData, objectType, objectID string) {
+	objectsByID := snapshot[objectType]
+	if objectsByID == nil {
+		return
+	}
+	delete(objectsByID, objectID)
+	if len(objectsByID) == 0 {
+		delete(snapshot, objectType)
+	}
+}
+
+func snapshotPriorityKey(objectType, objectID string) string {
+	return objectType + "\x00" + objectID
+}
+
 func (server *UDPServer) encodeUDPSnapshot(client UDPClient, sequence, tick uint64, objects SnapshotData) ([]byte, string, error) {
 	kind := "full"
 	baseline, hasBaseline := server.snapshotBaseline(client.connectionID)
-	if server.runtime.Config().EnableDeltaSnapshots && hasBaseline && !server.shouldSendFullSnapshot(baseline) {
+	if server.runtime.Config().EnableDeltaSnapshots && hasBaseline && !server.shouldSendFullSnapshot(baseline) && server.clientSupportsDeltaSnapshots(&client) {
 		kind = "delta"
 	}
 

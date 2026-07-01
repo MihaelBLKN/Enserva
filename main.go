@@ -17,7 +17,11 @@ func main() {
 	deltaSnapshots := flag.Bool("deltaSnapshots", false, "send delta snapshots after each client's initial full snapshot")
 	fullSnapshotInterval := flag.Int("fullSnapshotInterval", 64, "maximum emitted snapshots in a delta baseline cycle")
 	clientTimeout := flag.Duration("clientTimeout", 5*time.Second, "udp client timeout")
+	maxClients := flag.Int("maxClients", 0, "maximum simultaneous UDP clients, 0 allows unlimited clients")
 	maxUDPPacketSize := flag.Int("maxUdpPacketSize", 1200, "maximum outbound UDP packet payload size in bytes")
+	enableBandwidthBudget := flag.Bool("bandwidthBudget", false, "enable per-client outbound bandwidth budgeting")
+	clientBytesPerSecond := flag.Int("clientBytesPerSecond", 0, "outbound byte budget per UDP client per second")
+	defaultSnapshotPriority := flag.Int("defaultSnapshotPriority", int(network.OutboundPriorityNormal), "default outbound priority for snapshot objects")
 	reliableRetryInterval := flag.Duration("reliableRetryInterval", 100*time.Millisecond, "retry interval for unacknowledged reliable UDP messages")
 	reliableMaxAttempts := flag.Int("reliableMaxAttempts", 5, "maximum send attempts for one reliable UDP message")
 	reliableQueueLimit := flag.Int("reliableQueueLimit", 64, "maximum queued reliable UDP messages per client")
@@ -36,7 +40,11 @@ func main() {
 	config.EnableDeltaSnapshots = *deltaSnapshots
 	config.FullSnapshotInterval = *fullSnapshotInterval
 	config.ClientTimeout = *clientTimeout
+	config.MaxClients = *maxClients
 	config.MaxUDPPacketSize = *maxUDPPacketSize
+	config.EnableBandwidthBudget = *enableBandwidthBudget
+	config.ClientBytesPerSecond = *clientBytesPerSecond
+	config.DefaultSnapshotPriority = network.OutboundPriority(*defaultSnapshotPriority)
 	config.ReliableRetryInterval = *reliableRetryInterval
 	config.ReliableMaxAttempts = *reliableMaxAttempts
 	config.ReliableQueueLimit = *reliableQueueLimit

@@ -412,3 +412,114 @@ func TestTypedPayloadDecodeAvoidsRequestJSON(t *testing.T) {
 		t.Fatalf("unexpected decoded request: %#v", request)
 	}
 }
+
+func TestWireClientHelloNegotiationDefaultsForMinimalClient(t *testing.T) {
+	hello := network.ClientHello{
+		ClientName: "legacy-client",
+		Token:      "token",
+	}
+
+	encoded, err := network.EncodeClientHello(hello)
+	if err != nil {
+		t.Fatalf("encode client hello: %v", err)
+	}
+	decoded, err := network.DecodeClientHello(encoded)
+	if err != nil {
+		t.Fatalf("decode client hello: %v", err)
+	}
+
+	welcome, err := network.NegotiateClientHello(network.DefaultConfig(), decoded)
+	if err != nil {
+		t.Fatalf("negotiate hello: %v", err)
+	}
+	if welcome != (network.Welcome{}) {
+		t.Fatalf("expected safe default welcome, got %#v", welcome)
+	}
+}
+
+func TestWireClientHelloNegotiationReturnsSupportedCapabilities(t *testing.T) {
+	config := network.DefaultConfig()
+	config.EnableDeltaSnapshots = true
+	config.MaxUDPPacketSize = 1400
+	config.SupportedWireCapabilities = uint64(network.WireCapabilityDeltaSnapshots | network.WireCapabilityReliableOrdered)
+
+	hello := network.ClientHello{
+		ClientName:      "new-client",
+		Token:           "token",
+		ProtocolVersion: network.WireProtocolVersion,
+		Capabilities:    network.WireCapabilityDeltaSnapshots | network.WireCapabilityReliableOrdered | network.WireCapabilityReliableUnordered,
+		MaxPacketSize:   1200,
+	}
+
+	welcome, err := network.NegotiateClientHello(config, hello)
+	if err != nil {
+		t.Fatalf("negotiate hello: %v", err)
+	}
+	if welcome.ProtocolVersion != network.WireProtocolVersion {
+		t.Fatalf("expected protocol version %d, got %d", network.WireProtocolVersion, welcome.ProtocolVersion)
+	}
+	if !welcome.Capabilities.Has(network.WireCapabilityDeltaSnapshots) || !welcome.Capabilities.Has(network.WireCapabilityReliableOrdered) {
+		t.Fatalf("expected supported capabilities to be negotiated, got %#v", welcome.Capabilities)
+	}
+	if welcome.Capabilities.Has(network.WireCapabilityReliableUnordered) {
+		t.Fatalf("unsupported capability should not be negotiated, got %#v", welcome.Capabilities)
+	}
+	if welcome.MaxPacketSize != 1200 {
+		t.Fatalf("expected negotiated max packet size 1200, got %d", welcome.MaxPacketSize)
+	}
+
+	encoded, err := network.EncodeWelcome(welcome)
+	if err != nil {
+		t.Fatalf("encode welcome: %v", err)
+	}
+	decoded, err := network.DecodeWelcome(encoded)
+	if err != nil {
+		t.Fatalf("decode welcome: %v", err)
+	}
+	if decoded != welcome {
+		t.Fatalf("welcome roundtrip mismatch: %#v vs %#v", decoded, welcome)
+	}
+}
+
+func TestWireClientHelloNegotiationRejectsUnsupportedVersion(t *testing.T) {
+	hello := network.ClientHello{
+		ClientName:      "future-client",
+		Token:           "token",
+		ProtocolVersion: network.WireProtocolVersion + 1,
+	}
+
+	_, err := network.NegotiateClientHello(network.DefaultConfig(), hello)
+	if !errors.Is(err, network.ErrUnsupportedWireProtocolVersion) {
+		t.Fatalf("expected unsupported version error, got %v", err)
+	}
+}
+
+func TestWireClientHelloNegotiationClampsMaxPacketSize(t *testing.T) {
+	config := network.DefaultConfig()
+	config.MaxUDPPacketSize = 1300
+
+	hello := network.ClientHello{
+		ClientName:      "new-client",
+		Token:           "token",
+		ProtocolVersion: network.WireProtocolVersion,
+		Capabilities:    network.WireCapabilityDeltaSnapshots,
+		MaxPacketSize:   900,
+	}
+
+	welcome, err := network.NegotiateClientHello(config, hello)
+	if err != nil {
+		t.Fatalf("negotiate hello: %v", err)
+	}
+	if welcome.MaxPacketSize != 900 {
+		t.Fatalf("expected negotiated max packet size 900, got %d", welcome.MaxPacketSize)
+	}
+
+	hello.MaxPacketSize = 2000
+	welcome, err = network.NegotiateClientHello(config, hello)
+	if err != nil {
+		t.Fatalf("negotiate hello: %v", err)
+	}
+	if welcome.MaxPacketSize != 1300 {
+		t.Fatalf("expected packet size capped by server to 1300, got %d", welcome.MaxPacketSize)
+	}
+}

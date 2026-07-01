@@ -19,7 +19,11 @@ Enserva does not define environment-variable or file-based configuration.
 | `EnableDeltaSnapshots` | `bool`          | `false`           | Enables per-client delta snapshots after each client's first full state. |
 | `FullSnapshotInterval` | `int`           | `64`              | Maximum emitted snapshots in a delta baseline cycle, including the full. |
 | `ClientTimeout`        | `time.Duration` | `5 * time.Second` | Duration after which inactive UDP clients are removed.                   |
+| `MaxClients`           | `int`           | `0`               | Maximum simultaneous UDP clients. `0` allows unlimited clients.          |
 | `MaxUDPPacketSize`     | `int`           | `1200`            | Maximum serialized outbound UDP payload size in bytes.                   |
+| `EnableBandwidthBudget` | `bool`         | `false`           | Enables per-client outbound byte budgeting for UDP traffic.              |
+| `ClientBytesPerSecond` | `int`           | `0`               | Token-bucket refill rate and capacity for each UDP client when budgeting is enabled. |
+| `DefaultSnapshotPriority` | `OutboundPriority` | `OutboundPriorityNormal` | Priority used for snapshot objects that do not implement `SnapshotPriorityProvider`. |
 | `ReliableRetryInterval` | `time.Duration` | `100 * time.Millisecond` | How long UDP waits before retransmitting an unacknowledged reliable wire message. |
 | `ReliableMaxAttempts`  | `int`           | `5`               | Maximum send attempts for one reliable wire message, including the first send. |
 | `ReliableQueueLimit`   | `int`           | `64`              | Maximum pending outgoing reliable messages per UDP client.               |
@@ -40,7 +44,11 @@ Use `network.DefaultConfig()` for defaults:
     config.SnapshotRate = 10
     config.EnableDeltaSnapshots = true
     config.FullSnapshotInterval = 32
+    config.MaxClients = 64
     config.MaxUDPPacketSize = 1200
+    config.EnableBandwidthBudget = true
+    config.ClientBytesPerSecond = 24_000
+    config.DefaultSnapshotPriority = network.OutboundPriorityNormal
     config.ReliableRetryInterval = 100 * time.Millisecond
     config.ReliableMaxAttempts = 5
     config.ReliableQueueLimit = 64
@@ -76,8 +84,10 @@ Use `network.DefaultConfig()` for defaults:
 | `SnapshotRate > TickRate`    | Clamps snapshot rate to the tick rate.      |
 | `FullSnapshotInterval <= 0`  | Uses `64`.                                  |
 | `ClientTimeout <= 0`         | Uses `5s`.                                  |
+| `MaxClients <= 0`            | Allows unlimited UDP clients.              |
 | `MaxUDPPacketSize <= 0`      | Uses `1200`.                                |
 | `MaxUDPPacketSize > 65507`   | Clamps to the maximum UDP payload size.     |
+| `EnableBandwidthBudget == true` and `ClientBytesPerSecond <= 0` | Disables bandwidth budgeting. |
 | `ReliableRetryInterval <= 0` | Uses `100ms`.                               |
 | `ReliableMaxAttempts <= 0`   | Uses `5`.                                   |
 | `ReliableQueueLimit <= 0`    | Uses `64`.                                  |
@@ -133,7 +143,11 @@ The root `main.go` exposes these flags:
 | `-deltaSnapshots`       | `bool`     | `false` | Enable per-client delta snapshots.               |
 | `-fullSnapshotInterval` | `int`      | `64`    | Maximum emitted snapshots per full/delta cycle.  |
 | `-clientTimeout`        | `duration` | `5s`    | UDP client timeout.                              |
+| `-maxClients`           | `int`      | `0`     | Maximum simultaneous UDP clients; `0` is unlimited. |
 | `-maxUdpPacketSize`     | `int`      | `1200`  | Maximum outbound UDP payload size in bytes.      |
+| `-bandwidthBudget`      | `bool`     | `false` | Enable per-client outbound byte budgeting.       |
+| `-clientBytesPerSecond` | `int`      | `0`     | Outbound byte budget per UDP client per second.  |
+| `-defaultSnapshotPriority` | `int`   | `0`     | Default priority for snapshot objects without explicit metadata. |
 | `-reliableRetryInterval` | `duration` | `100ms` | Retry interval for unacknowledged reliable wire messages. |
 | `-reliableMaxAttempts`  | `int`      | `5`     | Maximum send attempts for one reliable wire message. |
 | `-reliableQueueLimit`   | `int`      | `64`    | Maximum pending reliable messages per UDP client. |
@@ -145,7 +159,7 @@ The root `main.go` exposes these flags:
 | `-debugAddr`            | `string`   | `:9100` | Debug interface HTTP address.                    |
 
 ```bash
-go run . -udpPort 9100 -tickRate 60 -snapshotRate 10 -deltaSnapshots -fullSnapshotInterval 32 -clientTimeout 10s -maxUdpPacketSize 1200 -reliableRetryInterval 100ms -reliableMaxAttempts 5 -reliableQueueLimit 64 -maxInputFutureTicks 8 -maxInputPastTicks 2 -inputBufferLimit 256
+go run . -udpPort 9100 -tickRate 60 -snapshotRate 10 -deltaSnapshots -fullSnapshotInterval 32 -clientTimeout 10s -maxClients 64 -maxUdpPacketSize 1200 -bandwidthBudget -clientBytesPerSecond 24000 -reliableRetryInterval 100ms -reliableMaxAttempts 5 -reliableQueueLimit 64 -maxInputFutureTicks 8 -maxInputPastTicks 2 -inputBufferLimit 256
 ```
 
 Launch the browser debug interface while the UDP server runs:
@@ -156,6 +170,10 @@ go run . -debug
 
 The default debug URL is `http://localhost:9100`. The interface polls `/debug/state` and displays normalized config, runtime ticks, registered factories, authentication state, interest-management data, UDP clients, transport counters, and all registered object snapshots including objects hidden from normal client snapshots.
 
+## Client Limit
+
+`Config.MaxClients` caps the number of simultaneous UDP client addresses tracked by the built-in transport, similar to a max-player setting for a game server. Existing clients continue to be accepted, but new UDP addresses are dropped once the cap is reached. Set it to `0` or any negative value to allow unlimited clients.
+
 ## Outbound UDP Packet Limit
 
 `Config.MaxUDPPacketSize` limits the serialized UDP payload sent by Enserva, not including IP or UDP headers. The default is 1200 bytes to avoid common internet path MTU fragmentation. You may raise it for controlled networks, but values above the maximum UDP payload size are clamped during normalization.
@@ -163,6 +181,16 @@ The default debug URL is `http://localhost:9100`. The interface polls `/debug/st
 The limit applies to both binary wire packets and legacy JSON packets. Immediate responses are checked after serialization and before `WriteToUDP`; if they exceed the limit, the response is dropped and `ErrUDPPacketTooLarge` is returned to the response caller. Snapshots are checked the same way and skipped for that client on that tick when oversized.
 
 Oversized outbound drops are logged and counted in the debug state as `udp.counters.oversizedOutboundPacketsDropped`.
+
+## Outbound Bandwidth Budget
+
+`Config.EnableBandwidthBudget` turns on a per-client UDP token bucket. `ClientBytesPerSecond` is both the refill rate and the maximum burst capacity. When a client does not have enough tokens for an outbound packet, immediate lower-level responses are dropped and deferrable traffic such as snapshots or reliable retransmits waits for a later refill.
+
+Snapshot objects can implement `SnapshotPriorityProvider` to return a generic `OutboundPriority`. When a snapshot is over the negotiated MTU or remaining budget, the UDP transport re-encodes the snapshot while omitting lower-priority objects before higher-priority objects. Objects without explicit metadata use `DefaultSnapshotPriority`.
+
+Built-in protocol responses such as authentication, errors, disconnects, and pongs use high or essential priorities. Priority only orders traffic competing for a client's budget; it does not make a message reliable or game-authoritative by itself.
+
+Budget counters are exposed in debug state as `udp.counters.bandwidthBudgetDrops`, `bandwidthBudgetDeferrals`, and `outboundBytesSent`, with per-client `bytesSent`, `bandwidthBudgetDrops`, and `bandwidthBudgetDeferrals`.
 
 ## Reliable UDP Delivery
 

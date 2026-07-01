@@ -6,57 +6,94 @@ Enserva's UDP transport uses binary wire packets as the primary client protocol.
 
 All integer fields are big endian.
 
-| Field | Type | Notes |
-| --- | --- | --- |
-| `magic` | `uint16` | ASCII `ES`, value `0x4553`. |
-| `protocol_version` | `uint8` | Current version is `1`. |
-| `message_count` | `uint8` | Number of framed messages in this packet. |
-| `reserved` | `uint32` | Reserved for future flags. Send as zero. |
-| `sequence` | `uint64` | Packet sequence number from the sender. |
-| `ack` | `uint64` | Latest peer packet sequence received by the sender. |
-| `ack_bits` | `uint64` | Bit `0` acknowledges `ack - 1`, bit `1` acknowledges `ack - 2`, and so on through 64 prior packets. |
-| `payload_length` | `uint32` | Total bytes after the packet header. |
+| Field              | Type     | Notes                                                                                               |
+| ------------------ | -------- | --------------------------------------------------------------------------------------------------- |
+| `magic`            | `uint16` | ASCII `ES`, value `0x4553`.                                                                         |
+| `protocol_version` | `uint8`  | Current version is `1`.                                                                             |
+| `message_count`    | `uint8`  | Number of framed messages in this packet.                                                           |
+| `reserved`         | `uint32` | Reserved for future flags. Send as zero.                                                            |
+| `sequence`         | `uint64` | Packet sequence number from the sender.                                                             |
+| `ack`              | `uint64` | Latest peer packet sequence received by the sender.                                                 |
+| `ack_bits`         | `uint64` | Bit `0` acknowledges `ack - 1`, bit `1` acknowledges `ack - 2`, and so on through 64 prior packets. |
+| `payload_length`   | `uint32` | Total bytes after the packet header.                                                                |
 
 Each message then has:
 
-| Field | Type | Notes |
-| --- | --- | --- |
-| `message_type` | `uint16` | Stable registered message ID, or `0x0007` for a reliable envelope. |
-| `payload_length` | `uint32` | Message payload length. |
-| `payload` | bytes | Encoded by the registered message definition. |
+| Field            | Type     | Notes                                                              |
+| ---------------- | -------- | ------------------------------------------------------------------ |
+| `message_type`   | `uint16` | Stable registered message ID, or `0x0007` for a reliable envelope. |
+| `payload_length` | `uint32` | Message payload length.                                            |
+| `payload`        | bytes    | Encoded by the registered message definition.                      |
 
 Oversized packets, malformed lengths, and unsupported protocol versions are rejected before gameplay dispatch.
+
+## Capability Negotiation
+
+`protocol.hello` and `protocol.welcome` now carry optional negotiation fields after the legacy `client_name` / `token` or `client_id` / `authenticated_id` strings.
+
+| Field              | Type     | Notes                                                                                                                                                          |
+| ------------------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `protocol_version` | `uint8`  | Optional protocol version requested by the client and echoed by the server when present. Older clients can omit it and keep using the legacy two-string shape. |
+| `capabilities`     | `uint64` | Bitset of optional protocol features. Unknown future bits are ignored by older peers.                                                                          |
+| `max_packet_size`  | `uint32` | Optional per-client packet size limit. The server still applies its own configured maximum and uses the lower of the two values.                               |
+
+Capability bits currently defined by the built-in server:
+
+| Bit | Capability | Behavior |
+| --- | --- | --- |
+| `0` | Delta snapshots | Allows negotiated clients to receive `engine.delta_snapshot` packets when delta snapshots are enabled. |
+| `1` | Reliable ordered delivery | Allows negotiated clients to send and receive `DeliveryReliableOrdered` envelopes. |
+| `2` | Reliable unordered delivery | Allows negotiated clients to send and receive `DeliveryReliableUnordered` envelopes. |
+
+The server keeps legacy clients functional by treating omitted negotiation fields as defaults. Once a client sends negotiation fields, the server only enables the intersection of the requested and supported capabilities. Unsupported protocol versions are rejected with the wire error `unsupported wire protocol version`.
 
 ## Delivery Classes
 
 Wire messages are unreliable by default. This preserves the normal UDP behavior used by high-rate traffic such as snapshots and player input. A message becomes reliable only when it is explicitly wrapped with delivery metadata or when its registered `WireMessageDefinition.Delivery` is set to a reliable class.
 
-| Delivery class | Behavior |
-| --- | --- |
-| `DeliveryUnreliable` | Original packet behavior. The message is dispatched if the packet is accepted, but it is not retried and duplicate reliable IDs are not tracked. |
-| `DeliveryReliableOrdered` | The UDP transport retries until a packet carrying the message is acknowledged or the configured attempt limit is reached. Inbound messages are dispatched to runtime handlers in reliable message ID order. |
-| `DeliveryReliableUnordered` | The UDP transport retries until acknowledgement but dispatches accepted inbound messages immediately, suppressing duplicate reliable IDs. |
+| Delivery class              | Behavior                                                                                                                                                                                                    |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DeliveryUnreliable`        | Original packet behavior. The message is dispatched if the packet is accepted, but it is not retried and duplicate reliable IDs are not tracked.                                                            |
+| `DeliveryReliableOrdered`   | The UDP transport retries until a packet carrying the message is acknowledged or the configured attempt limit is reached. Inbound messages are dispatched to runtime handlers in reliable message ID order. |
+| `DeliveryReliableUnordered` | The UDP transport retries until acknowledgement but dispatches accepted inbound messages immediately, suppressing duplicate reliable IDs.                                                                   |
 
 Reliable messages use the normal message header with `message_type = 0x0007`. The reliable envelope payload is:
 
-| Field | Type | Notes |
-| --- | --- | --- |
-| `delivery_class` | `uint8` | `1` for reliable ordered, `2` for reliable unordered. |
-| `reliable_id` | `uint64` | Monotonic non-zero ID in the sender's reliable stream. |
-| `inner_message_type` | `uint16` | Registered message ID for the wrapped payload. |
-| `inner_payload_length` | `uint32` | Wrapped payload length. |
-| `inner_payload` | bytes | Encoded by the inner message definition. |
+| Field                  | Type     | Notes                                                  |
+| ---------------------- | -------- | ------------------------------------------------------ |
+| `delivery_class`       | `uint8`  | `1` for reliable ordered, `2` for reliable unordered.  |
+| `reliable_id`          | `uint64` | Monotonic non-zero ID in the sender's reliable stream. |
+| `inner_message_type`   | `uint16` | Registered message ID for the wrapped payload.         |
+| `inner_payload_length` | `uint32` | Wrapped payload length.                                |
+| `inner_payload`        | bytes    | Encoded by the inner message definition.               |
 
 Packet `ack` and `ack_bits` still acknowledge packet sequence numbers, not reliable IDs. The server removes an outgoing reliable message from its retry queue when any packet that carried it is acknowledged. Retransmits reuse the same reliable ID inside a new packet sequence, so receivers suppress duplicates by reliable ID.
 
 Reliable ordered IDs are expected to start at `1` for a connection and increase by one for that ordered stream. If ID `3` arrives before ID `2`, dispatch waits until `2` is received. Reliable unordered delivery does not wait for gaps.
 
+## Outbound Priority And Budgeting
+
+Outbound priority is server-side transport metadata. It is not encoded as a new packet field and clients do not need to parse it. The UDP server uses priority only when `Config.EnableBandwidthBudget` is enabled or when a snapshot must be trimmed to fit the remaining budget and negotiated packet size.
+
+Built-in priority constants are:
+
+| Priority | Use |
+| --- | --- |
+| `OutboundPriorityLow` | Disposable or easily refreshed traffic. |
+| `OutboundPriorityNormal` | Default application and snapshot traffic. |
+| `OutboundPriorityHigh` | Important responses or state. |
+| `OutboundPriorityEssential` | Protocol-critical responses such as authentication failures or disconnects. |
+
+Servers can wrap one-off responses with `network.Prioritize`, `PrioritizeLow`, `PrioritizeHigh`, or `PrioritizeEssential`. Snapshot objects can implement `SnapshotPriority() network.OutboundPriority`; objects without that method use `Config.DefaultSnapshotPriority`.
+
+When a snapshot is over budget, the server omits lower-priority object updates before higher-priority updates and stores the filtered snapshot as the client's baseline. Omitted objects can appear in later full or delta snapshots after the budget refills.
+
 ## Message ID Ranges
 
-| Range | Owner |
-| --- | --- |
-| `0x0000-0x00ff` | Protocol/system messages such as hello, welcome, ping, pong, error, and disconnect. |
-| `0x0100-0x0fff` | Enserva engine messages such as the generic object request and built-in snapshot adapter. |
+| Range           | Owner                                                                                                                                  |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `0x0000-0x00ff` | Protocol/system messages such as hello, welcome, ping, pong, error, and disconnect.                                                    |
+| `0x0100-0x0fff` | Enserva engine messages such as the generic object request and built-in snapshot adapter.                                              |
 | `0x1000-0xffff` | Game-defined messages. Use this range for project-specific input, actions, replication, combat, inventory, and other gameplay traffic. |
 
 ## Registering A Game Message
@@ -179,14 +216,14 @@ For compatibility with the existing object model, Enserva registers an engine-le
 
 `engine.client_input` (`0x0107`) is a reusable input-buffer envelope:
 
-| Field | Type | Meaning |
-| --- | --- | --- |
-| `sequence` | `uint64` | Client input sequence. If zero, the UDP packet sequence is used by the server buffer. |
-| `tick` | `uint64` | Intended simulation/client tick. If zero, the current server tick is used. |
-| `object_type` | string | Optional target object type. |
-| `object_id` | string | Optional target object ID. |
-| `target_id` | string | Optional target ID when the input is not tied to one object key. |
-| `payload` | bytes | Opaque game-defined input bytes. |
+| Field         | Type     | Meaning                                                                               |
+| ------------- | -------- | ------------------------------------------------------------------------------------- |
+| `sequence`    | `uint64` | Client input sequence. If zero, the UDP packet sequence is used by the server buffer. |
+| `tick`        | `uint64` | Intended simulation/client tick. If zero, the current server tick is used.            |
+| `object_type` | string   | Optional target object type.                                                          |
+| `object_id`   | string   | Optional target object ID.                                                            |
+| `target_id`   | string   | Optional target ID when the input is not tied to one object key.                      |
+| `payload`     | bytes    | Opaque game-defined input bytes.                                                      |
 
 The UDP transport buffers `GenericClientInput` by client ID and target tick instead of routing it to object request handlers. Game code consumes buffered inputs from `Runtime.ConsumeClientInputs*` APIs during ticks.
 
@@ -198,11 +235,11 @@ The UDP server sends `engine.world_snapshot` (`0x0102`) for full snapshots. When
 
 Delta snapshots are calculated from the current client-visible snapshot after snapshot visibility, scene filtering, and interest management have already run. They contain:
 
-| Field | Meaning |
-| --- | --- |
-| `spawned` | Objects that are new or newly visible to the client. |
-| `changed` | Objects that existed in the previous visible snapshot but whose canonical snapshot value changed. |
-| `despawned` | Object type and ID pairs that were previously visible and are now removed or invisible. |
+| Field       | Meaning                                                                                           |
+| ----------- | ------------------------------------------------------------------------------------------------- |
+| `spawned`   | Objects that are new or newly visible to the client.                                              |
+| `changed`   | Objects that existed in the previous visible snapshot but whose canonical snapshot value changed. |
+| `despawned` | Object type and ID pairs that were previously visible and are now removed or invisible.           |
 
 Full snapshots are also forced when no baseline exists, after authentication changes a client ID, after scene-switch handling, after a client switches from JSON to wire packets, and after timeout/reconnect.
 

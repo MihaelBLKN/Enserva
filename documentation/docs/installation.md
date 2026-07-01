@@ -48,7 +48,11 @@ Useful flags:
 | `-tickRate`       | `128`   | Simulation ticks per second.                                     |
 | `-snapshotRate`   | `20`    | Snapshot broadcasts per second.                                  |
 | `-clientTimeout`  | `5s`    | UDP client inactivity timeout.                                   |
+| `-maxClients`     | `0`     | Maximum simultaneous UDP clients; `0` is unlimited.              |
 | `-maxUdpPacketSize` | `1200` | Maximum outbound UDP payload size in bytes.                      |
+| `-bandwidthBudget` | `false` | Enable per-client outbound byte budgeting.                       |
+| `-clientBytesPerSecond` | `0` | Outbound byte budget per UDP client per second.                  |
+| `-defaultSnapshotPriority` | `0` | Default priority for snapshot objects without explicit metadata. |
 | `-reliableRetryInterval` | `100ms` | Retry interval for unacknowledged reliable wire messages. |
 | `-reliableMaxAttempts` | `5` | Maximum send attempts for one reliable wire message. |
 | `-reliableQueueLimit` | `64` | Maximum pending reliable messages per UDP client. |

@@ -512,6 +512,33 @@ func (runtime *Runtime) SnapshotForClient(clientID string) SnapshotData {
 	return snapshot
 }
 
+// SnapshotPriorities returns priority metadata for object snapshots that are
+// present in snapshot and implement SnapshotPriorityProvider.
+func (runtime *Runtime) SnapshotPriorities(snapshot SnapshotData) map[string]OutboundPriority {
+	priorities := map[string]OutboundPriority{}
+	if len(snapshot) == 0 {
+		return priorities
+	}
+
+	runtime.mu.RLock()
+	defer runtime.mu.RUnlock()
+
+	for objectType, objectsByID := range snapshot {
+		registered := runtime.objects[objectType]
+		if registered == nil {
+			continue
+		}
+		for objectID := range objectsByID {
+			provider, ok := registered[objectID].(SnapshotPriorityProvider)
+			if !ok {
+				continue
+			}
+			priorities[snapshotPriorityKey(objectType, objectID)] = provider.SnapshotPriority()
+		}
+	}
+	return priorities
+}
+
 // RequestSceneSwitch asks an object to validate and apply a scene switch.
 func (runtime *Runtime) RequestSceneSwitch(ctx SceneSwitchContext) (SceneSwitchDecision, error) {
 	if ctx.ReceivedAt.IsZero() {

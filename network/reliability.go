@@ -19,6 +19,17 @@ var (
 	ErrReliableQueueFull    = errors.New("reliable queue full")
 )
 
+// OutboundPriority orders outbound traffic when a client is over its byte
+// budget. Higher values are sent before lower values.
+type OutboundPriority int
+
+const (
+	OutboundPriorityLow       OutboundPriority = -100
+	OutboundPriorityNormal    OutboundPriority = 0
+	OutboundPriorityHigh      OutboundPriority = 100
+	OutboundPriorityEssential OutboundPriority = 1000
+)
+
 // DeliveryClass describes how a wire message should be delivered over UDP.
 type DeliveryClass uint8
 
@@ -33,6 +44,34 @@ const (
 type WireDelivery struct {
 	Message any
 	Class   DeliveryClass
+}
+
+// WirePriority wraps a response or outbound message with generic priority
+// metadata. Unwrapped messages use Config.DefaultSnapshotPriority for snapshot
+// objects and normal protocol defaults for responses.
+type WirePriority struct {
+	Message  any
+	Priority OutboundPriority
+}
+
+// Prioritize marks message with an explicit outbound priority.
+func Prioritize(message any, priority OutboundPriority) WirePriority {
+	return WirePriority{Message: message, Priority: priority}
+}
+
+// PrioritizeLow marks message as lower priority than default traffic.
+func PrioritizeLow(message any) WirePriority {
+	return Prioritize(message, OutboundPriorityLow)
+}
+
+// PrioritizeHigh marks message as higher priority than default traffic.
+func PrioritizeHigh(message any) WirePriority {
+	return Prioritize(message, OutboundPriorityHigh)
+}
+
+// PrioritizeEssential marks message as essential protocol traffic.
+func PrioritizeEssential(message any) WirePriority {
+	return Prioritize(message, OutboundPriorityEssential)
 }
 
 // Deliver marks message with an explicit delivery class.

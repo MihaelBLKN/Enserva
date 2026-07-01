@@ -28,7 +28,11 @@
     	EnableDeltaSnapshots bool
     	FullSnapshotInterval int
     	ClientTimeout        time.Duration
+    	MaxClients           int
     	MaxUDPPacketSize     int
+    	EnableBandwidthBudget bool
+    	ClientBytesPerSecond int
+    	DefaultSnapshotPriority OutboundPriority
     	ReliableRetryInterval time.Duration
     	ReliableMaxAttempts   int
     	ReliableQueueLimit    int
@@ -51,7 +55,11 @@
         public bool EnableDeltaSnapshots { get; set; }
         public int FullSnapshotInterval { get; set; } = 64;
         public TimeSpan ClientTimeout { get; set; } = TimeSpan.FromSeconds(5);
+        public int MaxClients { get; set; }
         public int MaxUdpPacketSize { get; set; } = 1200;
+        public bool EnableBandwidthBudget { get; set; }
+        public int ClientBytesPerSecond { get; set; }
+        public int DefaultSnapshotPriority { get; set; } = 0;
         public TimeSpan ReliableRetryInterval { get; set; } = TimeSpan.FromMilliseconds(100);
         public int ReliableMaxAttempts { get; set; } = 5;
         public int ReliableQueueLimit { get; set; } = 64;
@@ -74,7 +82,11 @@ config.TickRate = 60
 config.SnapshotRate = 10
 config.EnableDeltaSnapshots = true
 config.FullSnapshotInterval = 32
+config.MaxClients = 64
 config.MaxUDPPacketSize = 1200
+config.EnableBandwidthBudget = true
+config.ClientBytesPerSecond = 24000
+config.DefaultSnapshotPriority = network.OutboundPriorityNormal
 config.ReliableRetryInterval = 100 * time.Millisecond
 config.ReliableMaxAttempts = 5
 config.ReliableQueueLimit = 64
@@ -92,7 +104,11 @@ config.TickRate = 60;
 config.SnapshotRate = 10;
 config.EnableDeltaSnapshots = true;
 config.FullSnapshotInterval = 32;
+config.MaxClients = 64;
 config.MaxUdpPacketSize = 1200;
+config.EnableBandwidthBudget = true;
+config.ClientBytesPerSecond = 24000;
+config.DefaultSnapshotPriority = 0;
 config.ReliableRetryInterval = TimeSpan.FromMilliseconds(100);
 config.ReliableMaxAttempts = 5;
 config.ReliableQueueLimit = 64;
@@ -107,7 +123,7 @@ Methods:
 
 | Method                | Returns         | Notes                                                   |
 | --------------------- | --------------- | ------------------------------------------------------- |
-| `DefaultConfig()`     | `Config`        | `:9000`, `128` ticks/s, `20` snapshots/s, delta snapshots disabled, full interval `64`, `5s` timeout, `1200` byte UDP packet limit, reliable retry `100ms`, max attempts `5`, queue limit `64`, input future `8`, input past `2`, input buffer limit `256`, debug at `:9100` when enabled. |
+| `DefaultConfig()`     | `Config`        | `:9000`, `128` ticks/s, `20` snapshots/s, delta snapshots disabled, full interval `64`, `5s` timeout, unlimited clients, `1200` byte UDP packet limit, bandwidth budgeting disabled, default snapshot priority `OutboundPriorityNormal`, reliable retry `100ms`, max attempts `5`, queue limit `64`, input future `8`, input past `2`, input buffer limit `256`, debug at `:9100` when enabled. |
 | `Normalized()`        | `Config`        | Applies defaults, clamps snapshot rate to tick rate, and clamps invalid UDP packet, reliable-delivery, and input-buffer limits. |
 | `TickInterval()`      | `time.Duration` | Duration between calls to `Runtime.Advance`.            |
 | `SnapshotEvery()`     | `uint64`        | Tick interval between UDP snapshot broadcasts.          |
@@ -150,6 +166,7 @@ Every registered object must provide a type, an ID, and a serializable snapshot.
 | `RequestHandler`        | `OnRequest(RequestContext) error`                                | Called for requests targeting an existing object.               |
 | `AuthenticationHandler` | `OnAuthenticationAttempt(AuthenticationContext) (string, error)` | Called for wire `ClientHello` and legacy JSON authentication messages. |
 | `SnapshotVisibility`    | `SnapshotVisible() bool`                                         | Return `false` to exclude an object from snapshots.             |
+| `SnapshotPriorityProvider` | `SnapshotPriority() OutboundPriority`                         | Optional transport metadata for ordering snapshot objects under outbound byte pressure. |
 | `SceneSwitchHandler`    | `OnSceneSwitchRequest(SceneSwitchContext) (SceneSwitchDecision, error)` | Called for standard scene-switch requests targeting the object. |
 
 ## Factories
@@ -382,11 +399,15 @@ When `Config.DebugEnabled` is true, `ListenAndServeUDP` starts the debug HTTP li
     await udpServer.ListenAndServeAsync();
     ```
 
-`UDPServer` accepts binary wire packets as the primary client protocol and legacy JSON datagrams for compatibility, tracks clients by UDP address, rejects duplicate or older non-zero sequence numbers, suppresses duplicate reliable message IDs, preserves ordered reliable dispatch, advances the runtime in a goroutine, and broadcasts snapshots at the configured rate. Serialized outbound responses and snapshots are dropped before `WriteToUDP` when they exceed `Config.MaxUDPPacketSize`.
+`UDPServer` accepts binary wire packets as the primary client protocol and legacy JSON datagrams for compatibility, tracks clients by UDP address, rejects new client addresses when `Config.MaxClients` is greater than zero and already reached, rejects duplicate or older non-zero sequence numbers, suppresses duplicate reliable message IDs, preserves ordered reliable dispatch, advances the runtime in a goroutine, and broadcasts snapshots at the configured rate. Serialized outbound responses and snapshots are dropped before `WriteToUDP` when they exceed `Config.MaxUDPPacketSize`.
+
+When `Config.EnableBandwidthBudget` is true, each UDP client gets a `ClientBytesPerSecond` token bucket. The transport spends tokens before outbound writes, defers snapshot/retry traffic when empty, and drops non-deferrable responses that do not fit. Snapshot objects can implement `SnapshotPriorityProvider`; lower-priority objects are omitted before higher-priority objects when a snapshot must fit the remaining budget or negotiated MTU.
 
 When `Config.EnableDeltaSnapshots` is true, the UDP server stores per-client baselines and sends `WorldDeltaSnapshot` or `DeltaSnapshotMessage` after the first full snapshot until `FullSnapshotInterval` forces a new full baseline. Delta baselines reset after authentication changes, scene-switch handling, protocol mode changes, timeout removal, or reconnect.
 
 Reliable wire responses stay in a per-client retry queue until a packet carrying them is acknowledged or the configured attempt limit is reached. This queue is opt-in; snapshots and legacy JSON traffic remain unreliable by default.
+
+Debug UDP counters include aggregate `bandwidthBudgetDrops`, `bandwidthBudgetDeferrals`, and `outboundBytesSent`, plus per-client byte and budget counters.
 
 !!! warning
 `UDPClient` and `UDPServer` expose no public fields. Treat their internals as implementation details.
@@ -669,6 +690,12 @@ The UDP transport accepts binary packets that start with `WireProtocolMagic` and
 | --- | --- |
 | `DeliveryClass` | Delivery metadata for wire messages. Values are `DeliveryUnreliable`, `DeliveryReliableOrdered`, and `DeliveryReliableUnordered`. |
 | `WireDelivery` | Wrapper accepted by UDP response writers to override the delivery class for one message. |
+| `OutboundPriority` | Generic priority metadata used by outbound budgeting. Built-in values are `OutboundPriorityLow`, `OutboundPriorityNormal`, `OutboundPriorityHigh`, and `OutboundPriorityEssential`. |
+| `WirePriority` | Wrapper accepted by UDP response writers to override priority for one message. |
+| `Prioritize(message, priority)` | Wraps a response with explicit outbound priority. |
+| `PrioritizeLow(message)` | Marks a response as lower priority than normal traffic. |
+| `PrioritizeHigh(message)` | Marks a response as higher priority than normal traffic. |
+| `PrioritizeEssential(message)` | Marks a response as essential protocol traffic. |
 | `Deliver(message, class)` | Wraps a response with an explicit delivery class. |
 | `DeliverReliableOrdered(message)` | Sends a response as reliable ordered when the peer uses wire packets. |
 | `DeliverReliableUnordered(message)` | Sends a response as reliable unordered when the peer uses wire packets. |

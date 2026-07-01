@@ -29,15 +29,35 @@ const (
 	MaxWireChatBytes          = 512
 )
 
+// WireCapabilities is a bitset of optional protocol features negotiated per client.
+type WireCapabilities uint64
+
+const (
+	// Wire capability bits negotiated during the hello/welcome handshake.
+	WireCapabilityDeltaSnapshots WireCapabilities = 1 << iota
+	WireCapabilityReliableOrdered
+	WireCapabilityReliableUnordered
+)
+
+// DefaultWireCapabilities returns the protocol features supported by the built-in server.
+func DefaultWireCapabilities() WireCapabilities {
+	return WireCapabilityDeltaSnapshots | WireCapabilityReliableOrdered | WireCapabilityReliableUnordered
+}
+
+func (capabilities WireCapabilities) Has(feature WireCapabilities) bool {
+	return capabilities&feature != 0
+}
+
 var (
-	ErrInvalidWirePacket            = errors.New("invalid wire packet")
-	ErrUnsupportedWireVersion       = errors.New("unsupported wire protocol version")
-	ErrWirePacketTooLarge           = errors.New("wire packet too large")
-	ErrWireMessageTooLarge          = errors.New("wire message too large")
-	ErrWireStringTooLarge           = errors.New("wire string too large")
-	ErrMalformedWirePayload         = errors.New("malformed wire payload")
-	ErrUnsupportedWireMessage       = errors.New("unsupported wire message")
-	ErrUnsupportedWireSnapshotValue = errors.New("unsupported wire snapshot value")
+	ErrInvalidWirePacket              = errors.New("invalid wire packet")
+	ErrUnsupportedWireVersion         = errors.New("unsupported wire protocol version")
+	ErrUnsupportedWireProtocolVersion = ErrUnsupportedWireVersion
+	ErrWirePacketTooLarge             = errors.New("wire packet too large")
+	ErrWireMessageTooLarge            = errors.New("wire message too large")
+	ErrWireStringTooLarge             = errors.New("wire string too large")
+	ErrMalformedWirePayload           = errors.New("malformed wire payload")
+	ErrUnsupportedWireMessage         = errors.New("unsupported wire message")
+	ErrUnsupportedWireSnapshotValue   = errors.New("unsupported wire snapshot value")
 )
 
 // Wire format:
@@ -117,8 +137,11 @@ type UnknownWireMessage struct {
 
 // ClientHello is the binary handshake/authentication message.
 type ClientHello struct {
-	ClientName string
-	Token      string
+	ClientName      string
+	Token           string
+	ProtocolVersion uint8
+	Capabilities    WireCapabilities
+	MaxPacketSize   uint32
 }
 
 // ObjectRequest is the generic compatibility request. Data is an opaque bounded
@@ -159,6 +182,9 @@ type ChatMessage struct {
 type Welcome struct {
 	ClientID        string
 	AuthenticatedID string
+	ProtocolVersion uint8
+	Capabilities    WireCapabilities
+	MaxPacketSize   uint32
 }
 
 // WorldSnapshot publishes the current visible world state for one client.
@@ -373,6 +399,11 @@ func EncodeClientHello(message ClientHello) ([]byte, error) {
 	if err := writeString(&writer, message.Token, MaxWireStringBytes); err != nil {
 		return nil, err
 	}
+	if message.ProtocolVersion != 0 || message.Capabilities != 0 || message.MaxPacketSize != 0 {
+		writer.WriteByte(message.ProtocolVersion)
+		writeUint64(&writer, uint64(message.Capabilities))
+		writeUint32(&writer, message.MaxPacketSize)
+	}
 	return writer.Bytes(), nil
 }
 
@@ -386,10 +417,32 @@ func DecodeClientHello(payload []byte) (ClientHello, error) {
 	if err != nil {
 		return ClientHello{}, err
 	}
+	hello := ClientHello{ClientName: clientName, Token: token}
+	if reader.Len() == 0 {
+		return hello, nil
+	}
+	if reader.Len() < 13 {
+		return ClientHello{}, fmt.Errorf("%w: trailing hello bytes", ErrMalformedWirePayload)
+	}
+	protocolVersion, err := reader.ReadByte()
+	if err != nil {
+		return ClientHello{}, err
+	}
+	capabilities, err := readUint64(reader)
+	if err != nil {
+		return ClientHello{}, err
+	}
+	maxPacketSize, err := readUint32(reader)
+	if err != nil {
+		return ClientHello{}, err
+	}
 	if reader.Len() != 0 {
 		return ClientHello{}, fmt.Errorf("%w: trailing hello bytes", ErrMalformedWirePayload)
 	}
-	return ClientHello{ClientName: clientName, Token: token}, nil
+	hello.ProtocolVersion = protocolVersion
+	hello.Capabilities = WireCapabilities(capabilities)
+	hello.MaxPacketSize = maxPacketSize
+	return hello, nil
 }
 
 func EncodeObjectRequest(message ObjectRequest) ([]byte, error) {
@@ -622,6 +675,11 @@ func EncodeWelcome(message Welcome) ([]byte, error) {
 	if err := writeString(&writer, message.AuthenticatedID, MaxWireStringBytes); err != nil {
 		return nil, err
 	}
+	if message.ProtocolVersion != 0 || message.Capabilities != 0 || message.MaxPacketSize != 0 {
+		writer.WriteByte(message.ProtocolVersion)
+		writeUint64(&writer, uint64(message.Capabilities))
+		writeUint32(&writer, message.MaxPacketSize)
+	}
 	return writer.Bytes(), nil
 }
 
@@ -635,10 +693,32 @@ func DecodeWelcome(payload []byte) (Welcome, error) {
 	if err != nil {
 		return Welcome{}, err
 	}
+	welcome := Welcome{ClientID: clientID, AuthenticatedID: authenticatedID}
+	if reader.Len() == 0 {
+		return welcome, nil
+	}
+	if reader.Len() < 13 {
+		return Welcome{}, fmt.Errorf("%w: trailing welcome bytes", ErrMalformedWirePayload)
+	}
+	protocolVersion, err := reader.ReadByte()
+	if err != nil {
+		return Welcome{}, err
+	}
+	capabilities, err := readUint64(reader)
+	if err != nil {
+		return Welcome{}, err
+	}
+	maxPacketSize, err := readUint32(reader)
+	if err != nil {
+		return Welcome{}, err
+	}
 	if reader.Len() != 0 {
 		return Welcome{}, fmt.Errorf("%w: trailing welcome bytes", ErrMalformedWirePayload)
 	}
-	return Welcome{ClientID: clientID, AuthenticatedID: authenticatedID}, nil
+	welcome.ProtocolVersion = protocolVersion
+	welcome.Capabilities = WireCapabilities(capabilities)
+	welcome.MaxPacketSize = maxPacketSize
+	return welcome, nil
 }
 
 func EncodeWorldSnapshot(message WorldSnapshot) ([]byte, error) {

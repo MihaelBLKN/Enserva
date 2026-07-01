@@ -52,7 +52,7 @@ Run the included example host:
 go run .
 ```
 
-Useful flags include `-udpPort`, `-tickRate`, `-snapshotRate`, `-deltaSnapshots`, `-fullSnapshotInterval`, `-clientTimeout`, `-maxUdpPacketSize`, `-reliableRetryInterval`, `-reliableMaxAttempts`, `-reliableQueueLimit`, `-maxInputFutureTicks`, `-maxInputPastTicks`, `-inputBufferLimit`, `-exampleObjects`, `-debug`, and `-debugAddr`.
+Useful flags include `-udpPort`, `-tickRate`, `-snapshotRate`, `-deltaSnapshots`, `-fullSnapshotInterval`, `-clientTimeout`, `-maxClients`, `-maxUdpPacketSize`, `-bandwidthBudget`, `-clientBytesPerSecond`, `-defaultSnapshotPriority`, `-reliableRetryInterval`, `-reliableMaxAttempts`, `-reliableQueueLimit`, `-maxInputFutureTicks`, `-maxInputPastTicks`, `-inputBufferLimit`, `-exampleObjects`, `-debug`, and `-debugAddr`.
 
 Launch the debug interface:
 

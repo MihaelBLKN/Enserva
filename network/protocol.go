@@ -2,6 +2,7 @@ package network
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -19,39 +20,45 @@ const (
 )
 
 type Config struct {
-	UDPAddress            string
-	TickRate              int
-	SnapshotRate          int
-	EnableDeltaSnapshots  bool
-	FullSnapshotInterval  int
-	ClientTimeout         time.Duration
-	MaxUDPPacketSize      int
-	ReliableRetryInterval time.Duration
-	ReliableMaxAttempts   int
-	ReliableQueueLimit    int
-	MaxInputFutureTicks   uint64
-	MaxInputPastTicks     uint64
-	InputBufferLimit      int
-	DebugEnabled          bool
-	DebugAddress          string
+	UDPAddress                string
+	TickRate                  int
+	SnapshotRate              int
+	EnableDeltaSnapshots      bool
+	SupportedWireCapabilities uint64
+	FullSnapshotInterval      int
+	ClientTimeout             time.Duration
+	MaxClients                int
+	MaxUDPPacketSize          int
+	EnableBandwidthBudget     bool
+	ClientBytesPerSecond      int
+	DefaultSnapshotPriority   OutboundPriority
+	ReliableRetryInterval     time.Duration
+	ReliableMaxAttempts       int
+	ReliableQueueLimit        int
+	MaxInputFutureTicks       uint64
+	MaxInputPastTicks         uint64
+	InputBufferLimit          int
+	DebugEnabled              bool
+	DebugAddress              string
 }
 
 // DefaultConfig returns the default server configuration.
 func DefaultConfig() Config {
 	return Config{
-		UDPAddress:            ":9000",
-		TickRate:              defaultTickRate,
-		SnapshotRate:          defaultSnapshotRate,
-		FullSnapshotInterval:  defaultFullSnapshotInterval,
-		ClientTimeout:         defaultClientTimeout,
-		MaxUDPPacketSize:      defaultMaxUDPPacketSize,
-		ReliableRetryInterval: defaultReliableRetryInterval,
-		ReliableMaxAttempts:   defaultReliableMaxAttempts,
-		ReliableQueueLimit:    defaultReliableQueueLimit,
-		MaxInputFutureTicks:   defaultMaxInputFutureTicks,
-		MaxInputPastTicks:     defaultMaxInputPastTicks,
-		InputBufferLimit:      defaultInputBufferLimit,
-		DebugAddress:          defaultDebugAddress,
+		UDPAddress:              ":9000",
+		TickRate:                defaultTickRate,
+		SnapshotRate:            defaultSnapshotRate,
+		FullSnapshotInterval:    defaultFullSnapshotInterval,
+		ClientTimeout:           defaultClientTimeout,
+		MaxUDPPacketSize:        defaultMaxUDPPacketSize,
+		DefaultSnapshotPriority: OutboundPriorityNormal,
+		ReliableRetryInterval:   defaultReliableRetryInterval,
+		ReliableMaxAttempts:     defaultReliableMaxAttempts,
+		ReliableQueueLimit:      defaultReliableQueueLimit,
+		MaxInputFutureTicks:     defaultMaxInputFutureTicks,
+		MaxInputPastTicks:       defaultMaxInputPastTicks,
+		InputBufferLimit:        defaultInputBufferLimit,
+		DebugAddress:            defaultDebugAddress,
 	}
 }
 
@@ -74,6 +81,12 @@ func (config Config) Normalized() Config {
 	if config.FullSnapshotInterval <= 0 {
 		config.FullSnapshotInterval = defaults.FullSnapshotInterval
 	}
+	if config.SupportedWireCapabilities == 0 {
+		config.SupportedWireCapabilities = uint64(DefaultWireCapabilities())
+	}
+	if !config.EnableDeltaSnapshots {
+		config.SupportedWireCapabilities &^= uint64(WireCapabilityDeltaSnapshots)
+	}
 	if config.ClientTimeout <= 0 {
 		config.ClientTimeout = defaults.ClientTimeout
 	}
@@ -82,6 +95,9 @@ func (config Config) Normalized() Config {
 	}
 	if config.MaxUDPPacketSize > maxUDPPacketSize {
 		config.MaxUDPPacketSize = maxUDPPacketSize
+	}
+	if config.EnableBandwidthBudget && config.ClientBytesPerSecond <= 0 {
+		config.EnableBandwidthBudget = false
 	}
 	if config.ReliableRetryInterval <= 0 {
 		config.ReliableRetryInterval = defaults.ReliableRetryInterval
@@ -106,6 +122,35 @@ func (config Config) Normalized() Config {
 	}
 
 	return config
+}
+
+// NegotiateClientHello resolves the server's agreed handshake values for one client hello.
+func NegotiateClientHello(config Config, hello ClientHello) (Welcome, error) {
+	config = config.Normalized()
+
+	protocolVersion := hello.ProtocolVersion
+	if protocolVersion == 0 {
+		protocolVersion = WireProtocolVersion
+	}
+	if protocolVersion != WireProtocolVersion {
+		return Welcome{}, fmt.Errorf("%w: %d", ErrUnsupportedWireProtocolVersion, protocolVersion)
+	}
+
+	requestedNegotiation := hello.ProtocolVersion != 0 || hello.Capabilities != 0 || hello.MaxPacketSize != 0
+	if !requestedNegotiation {
+		return Welcome{}, nil
+	}
+
+	maxPacketSize := uint32(config.MaxUDPPacketSize)
+	if hello.MaxPacketSize > 0 && int(hello.MaxPacketSize) < config.MaxUDPPacketSize {
+		maxPacketSize = hello.MaxPacketSize
+	}
+
+	return Welcome{
+		ProtocolVersion: protocolVersion,
+		Capabilities:    WireCapabilities(hello.Capabilities) & WireCapabilities(config.SupportedWireCapabilities),
+		MaxPacketSize:   maxPacketSize,
+	}, nil
 }
 
 // TickInterval returns the duration between simulation ticks.
@@ -170,6 +215,13 @@ type AuthenticationHandler interface {
 // SnapshotVisibility controls whether an object is included in snapshots.
 type SnapshotVisibility interface {
 	SnapshotVisible() bool
+}
+
+// SnapshotPriorityProvider lets an object annotate its snapshot updates with a
+// generic outbound priority. It is transport metadata only; game code decides
+// which objects, if any, implement it.
+type SnapshotPriorityProvider interface {
+	SnapshotPriority() OutboundPriority
 }
 
 // ObjectFactory creates runtime objects from server-side requests.

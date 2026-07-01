@@ -127,8 +127,8 @@ func TestDeltaSnapshotServerFirstSnapshotAndFullInterval(t *testing.T) {
 	}
 
 	first := readDeltaSnapshotJSON(t, conn)
-	second := readDeltaSnapshotJSON(t, conn)
-	third := readDeltaSnapshotJSON(t, conn)
+	second := readDeltaSnapshotJSONType(t, conn, "snapshot.delta")
+	third := readDeltaSnapshotJSONType(t, conn, "snapshot")
 
 	if first.Type != "snapshot" {
 		t.Fatalf("expected first snapshot to be full, got %#v", first)
@@ -146,6 +146,52 @@ func TestDeltaSnapshotServerFirstSnapshotAndFullInterval(t *testing.T) {
 	counters := server.DebugState().UDP.Counters
 	if counters.FullSnapshotsSent < 2 || counters.DeltaSnapshotsSent < 1 {
 		t.Fatalf("expected full and delta counters to increment, got %#v", counters)
+	}
+}
+
+func TestNegotiatedWireClientWithoutDeltaCapabilityReceivesFullSnapshots(t *testing.T) {
+	server, addr := startDeltaSnapshotAuthServer(t, network.Config{
+		TickRate:             200,
+		SnapshotRate:         200,
+		EnableDeltaSnapshots: true,
+		FullSnapshotInterval: 10,
+		MaxUDPPacketSize:     1200,
+	}, &deltaSnapshotTestObject{id: "target", value: 1})
+
+	conn := dialUDPPacketSizeClient(t, addr)
+	defer conn.Close()
+
+	hello, err := network.EncodeClientMessage(network.ClientHello{
+		ClientName:      "wire-client",
+		Token:           "valid-token",
+		ProtocolVersion: network.WireProtocolVersion,
+		Capabilities:    network.WireCapabilityReliableOrdered | network.WireCapabilityReliableUnordered,
+		MaxPacketSize:   1200,
+	})
+	if err != nil {
+		t.Fatalf("encode hello: %v", err)
+	}
+	packet, err := network.EncodePacket(1, []network.WireMessage{hello})
+	if err != nil {
+		t.Fatalf("encode hello packet: %v", err)
+	}
+	if _, err := conn.Write(packet); err != nil {
+		t.Fatalf("send hello: %v", err)
+	}
+
+	first := readWireSnapshotMessageType(t, conn)
+	second := readWireSnapshotMessageType(t, conn)
+
+	if first != network.WireMessageWorldSnapshot {
+		t.Fatalf("expected first snapshot to be full, got 0x%04x", first)
+	}
+	if second != network.WireMessageWorldSnapshot {
+		t.Fatalf("expected negotiated client without delta capability to receive full snapshot, got 0x%04x", second)
+	}
+
+	counters := server.DebugState().UDP.Counters
+	if counters.DeltaSnapshotsSent != 0 {
+		t.Fatalf("expected no delta snapshots for client without delta capability, got %#v", counters)
 	}
 }
 
@@ -186,6 +232,38 @@ func readDeltaSnapshotJSON(t *testing.T, conn *net.UDPConn) deltaSnapshotJSON {
 	return deltaSnapshotJSON{}
 }
 
+func readDeltaSnapshotJSONType(t *testing.T, conn *net.UDPConn, snapshotType string) deltaSnapshotJSON {
+	t.Helper()
+
+	buffer := make([]byte, 2048)
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		conn.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+		bytesRead, err := conn.Read(buffer)
+		if err != nil {
+			if isUDPTimeout(err) {
+				continue
+			}
+			t.Fatalf("read delta snapshot: %v", err)
+		}
+
+		var snapshot deltaSnapshotJSON
+		if err := json.Unmarshal(buffer[:bytesRead], &snapshot); err != nil {
+			t.Fatalf("decode delta snapshot: %v", err)
+		}
+		if snapshot.Type != snapshotType {
+			continue
+		}
+		if snapshot.Changed == nil {
+			snapshot.Changed = network.SnapshotData{}
+		}
+		return snapshot
+	}
+
+	t.Fatalf("expected %s packet", snapshotType)
+	return deltaSnapshotJSON{}
+}
+
 func deltaSnapshotRequest(t *testing.T, sequence uint64, objectID string) []byte {
 	t.Helper()
 
@@ -199,6 +277,65 @@ func deltaSnapshotRequest(t *testing.T, sequence uint64, objectID string) []byte
 		t.Fatalf("marshal delta request: %v", err)
 	}
 	return payload
+}
+
+func startDeltaSnapshotAuthServer(t *testing.T, config network.Config, object network.Object) (*network.Server, *net.UDPAddr) {
+	t.Helper()
+
+	port := freeUDPPacketSizePort(t)
+	config.UDPAddress = fmt.Sprintf("127.0.0.1:%d", port)
+	if config.ClientTimeout == 0 {
+		config.ClientTimeout = time.Second
+	}
+
+	server := network.NewServer(config)
+	if err := server.RegisterAuthenticationObject(&authenticationTestObject{id: "auth", returnID: "delta-client"}); err != nil {
+		t.Fatalf("register auth object: %v", err)
+	}
+	if err := server.RegisterObject(object); err != nil {
+		t.Fatalf("register object: %v", err)
+	}
+
+	go func() {
+		_ = server.ListenAndServeUDP()
+	}()
+
+	addr, err := net.ResolveUDPAddr("udp", config.UDPAddress)
+	if err != nil {
+		t.Fatalf("resolve UDP address: %v", err)
+	}
+	waitForUDPServerState(t, server)
+	return server, addr
+}
+
+func readWireSnapshotMessageType(t *testing.T, conn *net.UDPConn) network.WireMessageType {
+	t.Helper()
+
+	buffer := make([]byte, 4096)
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		conn.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+		bytesRead, err := conn.Read(buffer)
+		if err != nil {
+			if isUDPTimeout(err) {
+				continue
+			}
+			t.Fatalf("read wire snapshot: %v", err)
+		}
+
+		packet, err := network.DecodePacket(buffer[:bytesRead])
+		if err != nil {
+			continue
+		}
+		for _, message := range packet.Messages {
+			if message.Type == network.WireMessageWorldSnapshot || message.Type == network.WireMessageDeltaSnapshot {
+				return message.Type
+			}
+		}
+	}
+
+	t.Fatalf("expected wire snapshot packet")
+	return 0
 }
 
 func hasDespawnedObject(objects []network.SnapshotObjectRef, objectType, objectID string) bool {

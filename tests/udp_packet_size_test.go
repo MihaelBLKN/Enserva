@@ -63,6 +63,49 @@ func TestConfigNormalizedHandlesInvalidMaxUDPPacketSize(t *testing.T) {
 	}
 }
 
+func TestMaxClientsDropsNewUDPClientsBeyondLimit(t *testing.T) {
+	server, addr := startUDPPacketSizeServer(t, network.Config{
+		TickRate:         200,
+		SnapshotRate:     20,
+		ClientTimeout:    time.Second,
+		MaxClients:       1,
+		MaxUDPPacketSize: 1200,
+	}, &udpPacketSizeObject{
+		id:           "max-clients",
+		responseData: "ok",
+	})
+
+	first := dialUDPPacketSizeClient(t, addr)
+	defer first.Close()
+	_ = readUDPPacketSizePacket(t, first, udpPacketSizeRequest(t, 1, "max-clients"), 1200)
+
+	second := dialUDPPacketSizeClient(t, addr)
+	defer second.Close()
+	buffer := make([]byte, 2048)
+	deadline := time.Now().Add(750 * time.Millisecond)
+	for sequence := uint64(1); time.Now().Before(deadline); sequence++ {
+		if _, err := second.Write(udpPacketSizeRequest(t, sequence, "max-clients")); err != nil {
+			t.Fatalf("send second client request: %v", err)
+		}
+
+		second.SetReadDeadline(time.Now().Add(20 * time.Millisecond))
+		bytesRead, err := second.Read(buffer)
+		if err == nil {
+			t.Fatalf("expected second client to be dropped, got %d byte packet: %s", bytesRead, string(buffer[:bytesRead]))
+		}
+		if !isUDPTimeout(err) {
+			t.Fatalf("read second client response: %v", err)
+		}
+
+		state := server.DebugState().UDP
+		if state.ClientCount == 1 && state.Counters.RequestsDropped > 0 {
+			return
+		}
+	}
+
+	t.Fatalf("expected max clients to keep one client and drop new clients, state: %#v", server.DebugState().UDP)
+}
+
 func TestOversizedSnapshotIsNotSent(t *testing.T) {
 	server, addr := startUDPPacketSizeServer(t, network.Config{
 		TickRate:         200,
