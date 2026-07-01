@@ -81,6 +81,7 @@ nav:
       - Configuration: configuration.md
       - Architecture: architecture.md
       - Examples: examples.md
+      - Client Examples: client-examples.md
   - API Reference:
       - Overview: developer-api.md
       - network: api/network.md
