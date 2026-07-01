@@ -20,6 +20,7 @@ Tick rate: 128/s, snapshots: 20/s
 
 !!! tip
 Use `go run . -udpPort 9100` if another process is already using port `9000`.
+Use `go run . -udpAddr 0.0.0.0:9000` when you want clients on other machines to reach the server through any IPv4 interface.
 
 ## 2. Authenticate with a Wire Packet
 

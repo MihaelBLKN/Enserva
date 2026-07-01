@@ -52,7 +52,20 @@ Run the included example host:
 go run .
 ```
 
-Useful flags include `-udpPort`, `-tickRate`, `-snapshotRate`, `-deltaSnapshots`, `-fullSnapshotInterval`, `-clientTimeout`, `-maxClients`, `-maxUdpPacketSize`, `-bandwidthBudget`, `-clientBytesPerSecond`, `-defaultSnapshotPriority`, `-reliableRetryInterval`, `-reliableMaxAttempts`, `-reliableQueueLimit`, `-maxInputFutureTicks`, `-maxInputPastTicks`, `-inputBufferLimit`, `-exampleObjects`, `-debug`, and `-debugAddr`.
+Useful flags include `-udpAddr`, `-udpPort`, `-tickRate`, `-snapshotRate`, `-deltaSnapshots`, `-fullSnapshotInterval`, `-clientTimeout`, `-maxClients`, `-maxUdpPacketSize`, `-bandwidthBudget`, `-clientBytesPerSecond`, `-defaultSnapshotPriority`, `-reliableRetryInterval`, `-reliableMaxAttempts`, `-reliableQueueLimit`, `-maxInputFutureTicks`, `-maxInputPastTicks`, `-inputBufferLimit`, `-exampleObjects`, `-debug`, and `-debugAddr`.
+
+Bind the UDP server to a specific interface when deploying:
+
+```bash
+go run . -udpAddr 0.0.0.0:9000
+```
+
+The project uses only the Go standard library for server code, so the same commands work on Windows, Windows Server, and Linux distributions with a compatible Go toolchain. Cross-compile release binaries with Go's normal target variables:
+
+```bash
+GOOS=linux GOARCH=amd64 go build -o enserva .
+GOOS=windows GOARCH=amd64 go build -o enserva.exe .
+```
 
 Launch the debug interface:
 

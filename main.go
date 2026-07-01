@@ -6,12 +6,14 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 )
 
 // main parses command-line flags and starts the configured server.
 func main() {
 	udpPort := flag.Int("udpPort", 9000, "udp server port")
+	udpAddr := flag.String("udpAddr", "", "udp server listen address; overrides udpPort when set")
 	tickRate := flag.Int("tickRate", 128, "simulation ticks per second")
 	snapshotRate := flag.Int("snapshotRate", 20, "snapshots sent per second")
 	deltaSnapshots := flag.Bool("deltaSnapshots", false, "send delta snapshots after each client's initial full snapshot")
@@ -34,7 +36,7 @@ func main() {
 	flag.Parse()
 
 	config := network.DefaultConfig()
-	config.UDPAddress = fmt.Sprintf(":%d", *udpPort)
+	config.UDPAddress = udpListenAddress(*udpAddr, *udpPort)
 	config.TickRate = *tickRate
 	config.SnapshotRate = *snapshotRate
 	config.EnableDeltaSnapshots = *deltaSnapshots
@@ -62,4 +64,13 @@ func main() {
 	}
 
 	log.Fatal(server.ListenAndServe())
+}
+
+func udpListenAddress(address string, port int) string {
+	address = strings.TrimSpace(address)
+	if address != "" {
+		return address
+	}
+
+	return fmt.Sprintf(":%d", port)
 }

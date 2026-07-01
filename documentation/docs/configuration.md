@@ -140,6 +140,7 @@ The root `main.go` exposes these flags:
 
 | Flag                    | Type       | Default | Description                                      |
 | ----------------------- | ---------- | ------- | ------------------------------------------------ |
+| `-udpAddr`              | `string`   | empty   | Full UDP listen address. Overrides `-udpPort` when set. |
 | `-udpPort`              | `int`      | `9000`  | UDP port. Converted to `Config.UDPAddress`.      |
 | `-tickRate`             | `int`      | `128`   | Simulation ticks per second.                     |
 | `-snapshotRate`         | `int`      | `20`    | Snapshot broadcasts per second.                  |
@@ -162,8 +163,10 @@ The root `main.go` exposes these flags:
 | `-debugAddr`            | `string`   | `:9100` | Debug interface HTTP address.                    |
 
 ```bash
-go run . -udpPort 9100 -tickRate 60 -snapshotRate 10 -deltaSnapshots -fullSnapshotInterval 32 -clientTimeout 10s -maxClients 64 -maxUdpPacketSize 1200 -bandwidthBudget -clientBytesPerSecond 24000 -reliableRetryInterval 100ms -reliableMaxAttempts 5 -reliableQueueLimit 64 -maxInputFutureTicks 8 -maxInputPastTicks 2 -inputBufferLimit 256
+go run . -udpAddr 0.0.0.0:9100 -tickRate 60 -snapshotRate 10 -deltaSnapshots -fullSnapshotInterval 32 -clientTimeout 10s -maxClients 64 -maxUdpPacketSize 1200 -bandwidthBudget -clientBytesPerSecond 24000 -reliableRetryInterval 100ms -reliableMaxAttempts 5 -reliableQueueLimit 64 -maxInputFutureTicks 8 -maxInputPastTicks 2 -inputBufferLimit 256
 ```
+
+`-udpPort` preserves the simple default path and creates a hostless address such as `:9000`. Use `-udpAddr` for deployments that need an explicit interface, for example `127.0.0.1:9000`, `0.0.0.0:9000`, or `[::]:9000`.
 
 Launch the browser debug interface while the UDP server runs:
 

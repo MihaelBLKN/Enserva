@@ -44,6 +44,7 @@ Useful flags:
 
 | Flag              | Default | Description                                                      |
 | ----------------- | ------- | ---------------------------------------------------------------- |
+| `-udpAddr`        | empty   | Full UDP listen address; overrides `-udpPort` when set.          |
 | `-udpPort`        | `9000`  | UDP port for the example server.                                 |
 | `-tickRate`       | `128`   | Simulation ticks per second.                                     |
 | `-snapshotRate`   | `20`    | Snapshot broadcasts per second.                                  |
@@ -64,6 +65,43 @@ Example:
 
 ```bash
 go run . -udpPort 9100 -tickRate 60 -snapshotRate 10
+```
+
+Bind to all IPv4 interfaces for a Linux or Windows Server deployment:
+
+```bash
+go run . -udpAddr 0.0.0.0:9000
+```
+
+Bind to all IPv6 interfaces:
+
+```bash
+go run . -udpAddr "[::]:9000"
+```
+
+## Cross-Platform Builds
+
+The server code uses only the Go standard library and no shell wrapper, so the same source builds on Windows, Windows Server, and Linux distributions with a compatible Go toolchain.
+
+Build for the current operating system:
+
+```bash
+go build -o enserva .
+```
+
+Cross-compile from a Unix-like shell:
+
+```bash
+GOOS=linux GOARCH=amd64 go build -o enserva .
+GOOS=windows GOARCH=amd64 go build -o enserva.exe .
+```
+
+Cross-compile from PowerShell:
+
+```powershell
+$env:GOOS = "linux"; $env:GOARCH = "amd64"; go build -o enserva .
+$env:GOOS = "windows"; $env:GOARCH = "amd64"; go build -o enserva.exe .
+Remove-Item Env:\GOOS, Env:\GOARCH
 ```
 
 ## Build the Documentation
