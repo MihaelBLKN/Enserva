@@ -1,11 +1,7 @@
 #nullable disable
 
-using System;
-using System.Collections.Generic;
 using System.Net.Sockets;
 using System.Text;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace Enserva.ClientExamples
 {
@@ -469,15 +465,15 @@ namespace Enserva.ClientExamples
             switch (message.Type)
             {
                 case WireMessageType.Welcome:
-                {
-                    WelcomeMessage welcome = DecodeWelcome(reader);
-                    ClientId = welcome.ClientId;
-                    AuthenticatedId = welcome.AuthenticatedId;
-                    NegotiatedCapabilities = welcome.Capabilities;
-                    NegotiatedMaxPacketSize = welcome.MaxPacketSize;
-                    WelcomeReceived?.Invoke(welcome);
-                    break;
-                }
+                    {
+                        WelcomeMessage welcome = DecodeWelcome(reader);
+                        ClientId = welcome.ClientId;
+                        AuthenticatedId = welcome.AuthenticatedId;
+                        NegotiatedCapabilities = welcome.Capabilities;
+                        NegotiatedMaxPacketSize = welcome.MaxPacketSize;
+                        WelcomeReceived?.Invoke(welcome);
+                        break;
+                    }
                 case WireMessageType.Pong:
                     PongReceived?.Invoke(new PongMessage(reader.ReadUInt64()));
                     break;

@@ -176,6 +176,10 @@ go run . -debug
 
 The default debug URL is `http://localhost:9100`. The interface polls `/debug/state` and displays normalized config, runtime ticks, registered factories, authentication state, interest-management data, UDP clients, transport counters, and all registered object snapshots including objects hidden from normal client snapshots.
 
+Runtime metrics are exposed under `runtime.metrics`: `ticksAdvanced`, `lastTickDurationNs`, `lastTickDurationMs`, `maxTickDurationNs`, `maxTickDurationMs`, `totalTickDurationNs`, `totalTickDurationMs`, and `averageTickDurationMs`. These values measure the time spent inside `Runtime.Advance`, including object tick hooks.
+
+UDP transport metrics are exposed under `udp.counters`. In addition to request, authentication, snapshot, reliability, budget, and byte counters, snapshot serialization timing is available as `snapshotEncodeCount`, `lastSnapshotEncodeDurationNs`, `lastSnapshotEncodeDurationMs`, `maxSnapshotEncodeDurationNs`, `maxSnapshotEncodeDurationMs`, `totalSnapshotEncodeDurationNs`, `totalSnapshotEncodeDurationMs`, and `averageSnapshotEncodeDurationMs`.
+
 ## Client Limit
 
 `Config.MaxClients` caps the number of simultaneous UDP client addresses tracked by the built-in transport, similar to a max-player setting for a game server. Existing clients continue to be accepted, but new UDP addresses are dropped once the cap is reached. Set it to `0` or any negative value to allow unlimited clients.

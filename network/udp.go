@@ -14,34 +14,38 @@ import (
 
 // UDPServer serves the runtime protocol over UDP.
 type UDPServer struct {
-	address             string
-	clients             map[string]*UDPClient
-	runtime             *Runtime
-	startedAt           time.Time
-	datagramsReceived   uint64
-	requestsAccepted    uint64
-	requestsDropped     uint64
-	requestErrors       uint64
-	authAttempts        uint64
-	authSuccesses       uint64
-	authFailures        uint64
-	snapshotsSent       uint64
-	fullSnapshotsSent   uint64
-	deltaSnapshotsSent  uint64
-	snapshotErrors      uint64
-	oversizedOutbound   uint64
-	reliableQueued      uint64
-	reliableRetransmits uint64
-	reliableDrops       uint64
-	reliableAckRemovals uint64
-	budgetDrops         uint64
-	budgetDeferrals     uint64
-	outboundBytesSent   uint64
-	clientsCreated      uint64
-	clientsRemoved      uint64
-	nextSequence        uint64
-	snapshotBaselines   map[string]udpSnapshotBaseline
-	mu                  sync.Mutex
+	address                       string
+	clients                       map[string]*UDPClient
+	runtime                       *Runtime
+	startedAt                     time.Time
+	datagramsReceived             uint64
+	requestsAccepted              uint64
+	requestsDropped               uint64
+	requestErrors                 uint64
+	authAttempts                  uint64
+	authSuccesses                 uint64
+	authFailures                  uint64
+	snapshotsSent                 uint64
+	fullSnapshotsSent             uint64
+	deltaSnapshotsSent            uint64
+	snapshotErrors                uint64
+	oversizedOutbound             uint64
+	reliableQueued                uint64
+	reliableRetransmits           uint64
+	reliableDrops                 uint64
+	reliableAckRemovals           uint64
+	budgetDrops                   uint64
+	budgetDeferrals               uint64
+	outboundBytesSent             uint64
+	snapshotEncodeCount           uint64
+	lastSnapshotEncodeDurationNs  int64
+	maxSnapshotEncodeDurationNs   int64
+	totalSnapshotEncodeDurationNs int64
+	clientsCreated                uint64
+	clientsRemoved                uint64
+	nextSequence                  uint64
+	snapshotBaselines             map[string]udpSnapshotBaseline
+	mu                            sync.Mutex
 }
 
 // UDPClient tracks a client address and authentication state.
@@ -1391,6 +1395,11 @@ func snapshotPriorityKey(objectType, objectID string) string {
 }
 
 func (server *UDPServer) encodeUDPSnapshot(client UDPClient, sequence, tick uint64, objects SnapshotData) ([]byte, string, error) {
+	startedAt := time.Now()
+	defer func() {
+		server.recordSnapshotEncodeDuration(time.Since(startedAt))
+	}()
+
 	kind := "full"
 	baseline, hasBaseline := server.snapshotBaseline(client.connectionID)
 	if server.runtime.Config().EnableDeltaSnapshots && hasBaseline && !server.shouldSendFullSnapshot(baseline) && server.clientSupportsDeltaSnapshots(&client) {
@@ -1619,4 +1628,31 @@ func (server *UDPServer) recordReliableDrop() {
 	defer server.mu.Unlock()
 
 	server.reliableDrops++
+}
+
+func (server *UDPServer) recordSnapshotEncodeDuration(duration time.Duration) {
+	if duration < 0 {
+		return
+	}
+
+	nanoseconds := duration.Nanoseconds()
+	if nanoseconds == 0 {
+		nanoseconds = 1
+	}
+	server.mu.Lock()
+	defer server.mu.Unlock()
+
+	server.snapshotEncodeCount++
+	server.lastSnapshotEncodeDurationNs = nanoseconds
+	server.totalSnapshotEncodeDurationNs += nanoseconds
+	if nanoseconds > server.maxSnapshotEncodeDurationNs {
+		server.maxSnapshotEncodeDurationNs = nanoseconds
+	}
+}
+
+func snapshotAverageDurationMillis(totalNanoseconds int64, count uint64) float64 {
+	if count == 0 {
+		return 0
+	}
+	return durationMillis(totalNanoseconds) / float64(count)
 }

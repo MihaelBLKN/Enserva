@@ -145,7 +145,7 @@ func TestOversizedSnapshotIsNotSent(t *testing.T) {
 }
 
 func TestValidSnapshotUnderLimitSends(t *testing.T) {
-	_, addr := startUDPPacketSizeServer(t, network.Config{
+	server, addr := startUDPPacketSizeServer(t, network.Config{
 		TickRate:         200,
 		SnapshotRate:     200,
 		MaxUDPPacketSize: 1200,
@@ -169,6 +169,20 @@ func TestValidSnapshotUnderLimitSends(t *testing.T) {
 	}
 	if _, ok := snapshot.Objects["packet-size"]["valid-snapshot"]; !ok {
 		t.Fatalf("expected snapshot to include valid object: %#v", snapshot.Objects)
+	}
+
+	counters := server.DebugState().UDP.Counters
+	if counters.SnapshotsSent == 0 || counters.FullSnapshotsSent == 0 {
+		t.Fatalf("expected snapshot counters to increment, got %#v", counters)
+	}
+	if counters.OutboundBytesSent == 0 {
+		t.Fatalf("expected outbound byte counter to increment, got %#v", counters)
+	}
+	if counters.SnapshotEncodeCount == 0 || counters.LastSnapshotEncodeDurationNs <= 0 {
+		t.Fatalf("expected snapshot encode duration metrics, got %#v", counters)
+	}
+	if counters.LastSnapshotEncodeDurationMs <= 0 || counters.AverageSnapshotEncodeDurationMs <= 0 {
+		t.Fatalf("expected snapshot encode millisecond metrics, got %#v", counters)
 	}
 }
 

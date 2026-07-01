@@ -1,8 +1,6 @@
 #nullable disable
 
-using System;
 using System.Buffers.Binary;
-using System.Collections.Generic;
 using System.Text;
 
 namespace Enserva.ClientExamples
@@ -152,21 +150,21 @@ namespace Enserva.ClientExamples
                 case WireValueString:
                     return ReadString();
                 case WireValueObject:
-                {
-                    ushort count = ReadUInt16();
-                    Dictionary<string, object> value = new Dictionary<string, object>(count);
-                    for (int index = 0; index < count; index++)
-                        value[ReadString()] = ReadWireValue(depth + 1);
-                    return value;
-                }
+                    {
+                        ushort count = ReadUInt16();
+                        Dictionary<string, object> value = new Dictionary<string, object>(count);
+                        for (int index = 0; index < count; index++)
+                            value[ReadString()] = ReadWireValue(depth + 1);
+                        return value;
+                    }
                 case WireValueList:
-                {
-                    ushort count = ReadUInt16();
-                    List<object> value = new List<object>(count);
-                    for (int index = 0; index < count; index++)
-                        value.Add(ReadWireValue(depth + 1));
-                    return value;
-                }
+                    {
+                        ushort count = ReadUInt16();
+                        List<object> value = new List<object>(count);
+                        for (int index = 0; index < count; index++)
+                            value.Add(ReadWireValue(depth + 1));
+                        return value;
+                    }
                 default:
                     throw new InvalidOperationException("Unknown wire value kind: " + kind);
             }

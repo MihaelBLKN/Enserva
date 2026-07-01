@@ -49,12 +49,14 @@ type Runtime struct {
 	factories                map[string]ObjectFactory
 	wireMessages             *WireMessageRegistry
 	inputs                   inputBuffer
+	metrics                  RuntimeMetrics
 	authenticationHandler    AuthenticationHandler
 	features                 Features
 	authenticationObjectType string
 	authenticationObjectID   string
 	mu                       sync.RWMutex
 	hooksMu                  sync.Mutex
+	metricsMu                sync.Mutex
 }
 
 // NewRuntime creates a runtime with normalized configuration.
@@ -130,6 +132,14 @@ func (runtime *Runtime) ConsumeClientInputsForObjectAtTick(clientID string, tick
 // InputBufferMetrics returns cumulative input-buffer counters.
 func (runtime *Runtime) InputBufferMetrics() InputBufferMetrics {
 	return runtime.inputs.metricsSnapshot()
+}
+
+// Metrics returns cumulative runtime timing counters.
+func (runtime *Runtime) Metrics() RuntimeMetrics {
+	runtime.metricsMu.Lock()
+	defer runtime.metricsMu.Unlock()
+
+	return runtime.metrics
 }
 
 // RegisterObject adds object to the runtime and runs its initialization hook.
@@ -306,6 +316,10 @@ func (runtime *Runtime) CreateObject(objectType, objectID string) (Object, error
 func (runtime *Runtime) Advance() uint64 {
 	runtime.hooksMu.Lock()
 	defer runtime.hooksMu.Unlock()
+	startedAt := time.Now()
+	defer func() {
+		runtime.recordTickDuration(time.Since(startedAt))
+	}()
 
 	runtime.mu.Lock()
 	runtime.tick++
@@ -335,6 +349,30 @@ func (runtime *Runtime) Advance() uint64 {
 	}
 
 	return tick
+}
+
+func (runtime *Runtime) recordTickDuration(duration time.Duration) {
+	if duration < 0 {
+		return
+	}
+
+	nanoseconds := duration.Nanoseconds()
+	if nanoseconds == 0 {
+		nanoseconds = 1
+	}
+	runtime.metricsMu.Lock()
+	defer runtime.metricsMu.Unlock()
+
+	runtime.metrics.TicksAdvanced++
+	runtime.metrics.LastTickDurationNs = nanoseconds
+	runtime.metrics.LastTickDurationMs = durationMillis(nanoseconds)
+	runtime.metrics.TotalTickDurationNs += nanoseconds
+	runtime.metrics.TotalTickDurationMs = durationMillis(runtime.metrics.TotalTickDurationNs)
+	if nanoseconds > runtime.metrics.MaxTickDurationNs {
+		runtime.metrics.MaxTickDurationNs = nanoseconds
+		runtime.metrics.MaxTickDurationMs = durationMillis(nanoseconds)
+	}
+	runtime.metrics.AverageTickDurationMs = runtime.metrics.TotalTickDurationMs / float64(runtime.metrics.TicksAdvanced)
 }
 
 // HandleRequest routes a client request to the addressed object.

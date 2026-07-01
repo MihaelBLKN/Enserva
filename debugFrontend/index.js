@@ -38,6 +38,11 @@ function number(value) {
   return text(value);
 }
 
+function durationMs(value) {
+  if (typeof value !== "number") return "0.000 ms";
+  return value.toLocaleString(undefined, { maximumFractionDigits: 6 }) + " ms";
+}
+
 function escapeHTML(value) {
   return text(value)
     .replace(/&/g, "&amp;")
@@ -105,14 +110,24 @@ function renderMetrics(data) {
 function renderRuntime(runtime) {
   el.runtimeBadge.textContent = "tick " + number(runtime.tick);
   const auth = runtime.authentication || {};
+  const metrics = runtime.metrics || {};
+  const input = runtime.inputBuffer || {};
   const authLabel = auth.required ? auth.objectType + "/" + auth.objectId : "disabled";
   const rows = [
     ["Tick", number(runtime.tick)],
+    ["Ticks advanced", number(metrics.ticksAdvanced || 0)],
+    ["Last tick", durationMs(metrics.lastTickDurationMs || 0)],
+    ["Average tick", durationMs(metrics.averageTickDurationMs || 0)],
+    ["Max tick", durationMs(metrics.maxTickDurationMs || 0)],
     ["Objects", number(runtime.objectCount)],
     ["Object types", number(runtime.objectTypes)],
     ["Factories", number(runtime.factoryCount)],
     ["Authentication", authLabel],
-    ["Auth handler", auth.goType || "none"]
+    ["Auth handler", auth.goType || "none"],
+    ["Inputs buffered", number(input.buffered || 0)],
+    ["Inputs consumed", number(input.consumed || 0)],
+    ["Inputs rejected", number((input.staleRejected || 0) + (input.futureRejected || 0))],
+    ["Inputs dropped", number(input.dropped || 0)]
   ];
 
   const factoryChips = (runtime.factories || []).map(function(factory) {
@@ -182,7 +197,14 @@ function renderUDP(udp) {
     ["Auth tries", counters.authAttempts],
     ["Auth ok", counters.authSuccesses],
     ["Snapshots", counters.snapshotsSent],
+    ["Full snapshots", counters.fullSnapshotsSent],
+    ["Delta snapshots", counters.deltaSnapshotsSent],
+    ["Encode calls", counters.snapshotEncodeCount],
+    ["Encode avg", durationMs(counters.averageSnapshotEncodeDurationMs || 0)],
+    ["Bytes sent", counters.outboundBytesSent],
     ["Oversized", counters.oversizedOutboundPacketsDropped],
+    ["Budget drops", counters.bandwidthBudgetDrops],
+    ["Budget defers", counters.bandwidthBudgetDeferrals],
     ["Reliable queued", counters.reliableMessagesQueued],
     ["Reliable retries", counters.reliableRetransmits],
     ["Reliable drops", counters.reliableDrops],
@@ -194,7 +216,7 @@ function renderUDP(udp) {
   }).join("") + "</div>";
 
   const clients = (udp.clients || []).map(function(client) {
-    return ["Address", client.address, "ID", client.id, "Connection", client.connectionId, "Authenticated", client.authenticated, "Last seq", client.lastSeq, "Reliable queued", client.reliableQueued, "Idle", client.idle];
+    return ["Address", client.address, "ID", client.id, "Connection", client.connectionId, "Authenticated", client.authenticated, "Last seq", client.lastSeq, "Bytes sent", client.bytesSent, "Reliable queued", client.reliableQueued, "Budget drops", client.bandwidthBudgetDrops, "Budget defers", client.bandwidthBudgetDeferrals, "Idle", client.idle];
   }).map(function(rows) {
     const pairs = [];
     for (let i = 0; i < rows.length; i += 2) pairs.push([rows[i], rows[i + 1]]);

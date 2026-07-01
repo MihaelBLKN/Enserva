@@ -74,6 +74,7 @@ type DebugRuntimeState struct {
 	FactoryCount   int                       `json:"factoryCount"`
 	Factories      []DebugFactoryState       `json:"factories"`
 	Authentication DebugAuthenticationState  `json:"authentication"`
+	Metrics        RuntimeMetrics            `json:"metrics"`
 	InputBuffer    InputBufferMetrics        `json:"inputBuffer"`
 	Objects        []DebugObjectTypeState    `json:"objects"`
 	ObjectsByType  map[string]map[string]any `json:"objectsByType"`
@@ -172,27 +173,35 @@ type DebugUDPState struct {
 
 // DebugUDPCounters contains cumulative UDP transport counters.
 type DebugUDPCounters struct {
-	DatagramsReceived   uint64 `json:"datagramsReceived"`
-	RequestsAccepted    uint64 `json:"requestsAccepted"`
-	RequestsDropped     uint64 `json:"requestsDropped"`
-	RequestErrors       uint64 `json:"requestErrors"`
-	AuthAttempts        uint64 `json:"authAttempts"`
-	AuthSuccesses       uint64 `json:"authSuccesses"`
-	AuthFailures        uint64 `json:"authFailures"`
-	SnapshotsSent       uint64 `json:"snapshotsSent"`
-	FullSnapshotsSent   uint64 `json:"fullSnapshotsSent"`
-	DeltaSnapshotsSent  uint64 `json:"deltaSnapshotsSent"`
-	SnapshotErrors      uint64 `json:"snapshotErrors"`
-	OversizedOutbound   uint64 `json:"oversizedOutboundPacketsDropped"`
-	ReliableQueued      uint64 `json:"reliableMessagesQueued"`
-	ReliableRetransmits uint64 `json:"reliableRetransmits"`
-	ReliableDrops       uint64 `json:"reliableDrops"`
-	ReliableAckRemovals uint64 `json:"reliableAckRemovals"`
-	BudgetDrops         uint64 `json:"bandwidthBudgetDrops"`
-	BudgetDeferrals     uint64 `json:"bandwidthBudgetDeferrals"`
-	OutboundBytesSent   uint64 `json:"outboundBytesSent"`
-	ClientsCreated      uint64 `json:"clientsCreated"`
-	ClientsRemoved      uint64 `json:"clientsRemoved"`
+	DatagramsReceived               uint64  `json:"datagramsReceived"`
+	RequestsAccepted                uint64  `json:"requestsAccepted"`
+	RequestsDropped                 uint64  `json:"requestsDropped"`
+	RequestErrors                   uint64  `json:"requestErrors"`
+	AuthAttempts                    uint64  `json:"authAttempts"`
+	AuthSuccesses                   uint64  `json:"authSuccesses"`
+	AuthFailures                    uint64  `json:"authFailures"`
+	SnapshotsSent                   uint64  `json:"snapshotsSent"`
+	FullSnapshotsSent               uint64  `json:"fullSnapshotsSent"`
+	DeltaSnapshotsSent              uint64  `json:"deltaSnapshotsSent"`
+	SnapshotErrors                  uint64  `json:"snapshotErrors"`
+	OversizedOutbound               uint64  `json:"oversizedOutboundPacketsDropped"`
+	ReliableQueued                  uint64  `json:"reliableMessagesQueued"`
+	ReliableRetransmits             uint64  `json:"reliableRetransmits"`
+	ReliableDrops                   uint64  `json:"reliableDrops"`
+	ReliableAckRemovals             uint64  `json:"reliableAckRemovals"`
+	BudgetDrops                     uint64  `json:"bandwidthBudgetDrops"`
+	BudgetDeferrals                 uint64  `json:"bandwidthBudgetDeferrals"`
+	OutboundBytesSent               uint64  `json:"outboundBytesSent"`
+	SnapshotEncodeCount             uint64  `json:"snapshotEncodeCount"`
+	LastSnapshotEncodeDurationNs    int64   `json:"lastSnapshotEncodeDurationNs"`
+	LastSnapshotEncodeDurationMs    float64 `json:"lastSnapshotEncodeDurationMs"`
+	MaxSnapshotEncodeDurationNs     int64   `json:"maxSnapshotEncodeDurationNs"`
+	MaxSnapshotEncodeDurationMs     float64 `json:"maxSnapshotEncodeDurationMs"`
+	TotalSnapshotEncodeDurationNs   int64   `json:"totalSnapshotEncodeDurationNs"`
+	TotalSnapshotEncodeDurationMs   float64 `json:"totalSnapshotEncodeDurationMs"`
+	AverageSnapshotEncodeDurationMs float64 `json:"averageSnapshotEncodeDurationMs"`
+	ClientsCreated                  uint64  `json:"clientsCreated"`
+	ClientsRemoved                  uint64  `json:"clientsRemoved"`
 }
 
 // DebugUDPClient describes a known UDP client.
@@ -300,6 +309,7 @@ func (runtime *Runtime) DebugState() DebugRuntimeState {
 		FactoryCount:   len(factories),
 		Factories:      factories,
 		Authentication: authentication,
+		Metrics:        runtime.Metrics(),
 		InputBuffer:    runtime.InputBufferMetrics(),
 		Objects:        objectGroups,
 		ObjectsByType:  snapshotMap,
@@ -385,27 +395,35 @@ func (server *UDPServer) DebugState() DebugUDPState {
 		AuthenticatedClientCount: authenticatedClients,
 		ClientTimeout:            server.runtime.Config().ClientTimeout.String(),
 		Counters: DebugUDPCounters{
-			DatagramsReceived:   server.datagramsReceived,
-			RequestsAccepted:    server.requestsAccepted,
-			RequestsDropped:     server.requestsDropped,
-			RequestErrors:       server.requestErrors,
-			AuthAttempts:        server.authAttempts,
-			AuthSuccesses:       server.authSuccesses,
-			AuthFailures:        server.authFailures,
-			SnapshotsSent:       server.snapshotsSent,
-			FullSnapshotsSent:   server.fullSnapshotsSent,
-			DeltaSnapshotsSent:  server.deltaSnapshotsSent,
-			SnapshotErrors:      server.snapshotErrors,
-			OversizedOutbound:   server.oversizedOutbound,
-			ReliableQueued:      server.reliableQueued,
-			ReliableRetransmits: server.reliableRetransmits,
-			ReliableDrops:       server.reliableDrops,
-			ReliableAckRemovals: server.reliableAckRemovals,
-			BudgetDrops:         server.budgetDrops,
-			BudgetDeferrals:     server.budgetDeferrals,
-			OutboundBytesSent:   server.outboundBytesSent,
-			ClientsCreated:      server.clientsCreated,
-			ClientsRemoved:      server.clientsRemoved,
+			DatagramsReceived:               server.datagramsReceived,
+			RequestsAccepted:                server.requestsAccepted,
+			RequestsDropped:                 server.requestsDropped,
+			RequestErrors:                   server.requestErrors,
+			AuthAttempts:                    server.authAttempts,
+			AuthSuccesses:                   server.authSuccesses,
+			AuthFailures:                    server.authFailures,
+			SnapshotsSent:                   server.snapshotsSent,
+			FullSnapshotsSent:               server.fullSnapshotsSent,
+			DeltaSnapshotsSent:              server.deltaSnapshotsSent,
+			SnapshotErrors:                  server.snapshotErrors,
+			OversizedOutbound:               server.oversizedOutbound,
+			ReliableQueued:                  server.reliableQueued,
+			ReliableRetransmits:             server.reliableRetransmits,
+			ReliableDrops:                   server.reliableDrops,
+			ReliableAckRemovals:             server.reliableAckRemovals,
+			BudgetDrops:                     server.budgetDrops,
+			BudgetDeferrals:                 server.budgetDeferrals,
+			OutboundBytesSent:               server.outboundBytesSent,
+			SnapshotEncodeCount:             server.snapshotEncodeCount,
+			LastSnapshotEncodeDurationNs:    server.lastSnapshotEncodeDurationNs,
+			LastSnapshotEncodeDurationMs:    durationMillis(server.lastSnapshotEncodeDurationNs),
+			MaxSnapshotEncodeDurationNs:     server.maxSnapshotEncodeDurationNs,
+			MaxSnapshotEncodeDurationMs:     durationMillis(server.maxSnapshotEncodeDurationNs),
+			TotalSnapshotEncodeDurationNs:   server.totalSnapshotEncodeDurationNs,
+			TotalSnapshotEncodeDurationMs:   durationMillis(server.totalSnapshotEncodeDurationNs),
+			AverageSnapshotEncodeDurationMs: snapshotAverageDurationMillis(server.totalSnapshotEncodeDurationNs, server.snapshotEncodeCount),
+			ClientsCreated:                  server.clientsCreated,
+			ClientsRemoved:                  server.clientsRemoved,
 		},
 		Clients: clients,
 	}

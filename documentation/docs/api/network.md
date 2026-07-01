@@ -383,7 +383,7 @@ Creates a runtime with normalized configuration and empty object/factory maps.
 | `DebugState() DebugState`                                        | Returns the current server debug snapshot.                     |
 | `UDPServer() *UDPServer`                                         | Returns the active UDP server after startup, when available.   |
 
-When `Config.DebugEnabled` is true, `ListenAndServeUDP` starts the debug HTTP listener in a goroutine before serving UDP. The UI is available at `/` and `/debug`, while `/debug/state` returns JSON containing normalized config, runtime state, feature state, UDP clients, transport counters, and object snapshots.
+When `Config.DebugEnabled` is true, `ListenAndServeUDP` starts the debug HTTP listener in a goroutine before serving UDP. The UI is available at `/` and `/debug`, while `/debug/state` returns JSON containing normalized config, runtime state, feature state, UDP clients, transport counters, metrics, and object snapshots.
 
 ## UDP Server
 
@@ -411,7 +411,9 @@ When `Config.EnableDeltaSnapshots` is true, the UDP server stores per-client bas
 
 Reliable wire responses stay in a per-client retry queue until a packet carrying them is acknowledged or the configured attempt limit is reached. This queue is opt-in; snapshots and legacy JSON traffic remain unreliable by default.
 
-Debug UDP counters include aggregate `bandwidthBudgetDrops`, `bandwidthBudgetDeferrals`, and `outboundBytesSent`, plus per-client byte and budget counters.
+Debug runtime metrics are exposed as `runtime.metrics`: `ticksAdvanced`, `lastTickDurationNs`, `lastTickDurationMs`, `maxTickDurationNs`, `maxTickDurationMs`, `totalTickDurationNs`, `totalTickDurationMs`, and `averageTickDurationMs`.
+
+Debug UDP counters include aggregate `bandwidthBudgetDrops`, `bandwidthBudgetDeferrals`, and `outboundBytesSent`, plus per-client byte and budget counters. Snapshot encode timing is exposed as `snapshotEncodeCount`, `lastSnapshotEncodeDurationNs`, `lastSnapshotEncodeDurationMs`, `maxSnapshotEncodeDurationNs`, `maxSnapshotEncodeDurationMs`, `totalSnapshotEncodeDurationNs`, `totalSnapshotEncodeDurationMs`, and `averageSnapshotEncodeDurationMs`.
 
 !!! warning
 `UDPClient` and `UDPServer` expose no public fields. Treat their internals as implementation details.

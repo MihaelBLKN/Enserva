@@ -67,6 +67,30 @@ func TestDebugStateIncludesRuntimeInternals(t *testing.T) {
 	}
 }
 
+// TestDebugStateIncludesRuntimeMetrics verifies that runtime tick metrics are exposed.
+func TestDebugStateIncludesRuntimeMetrics(t *testing.T) {
+	server := network.NewServer(network.Config{DebugEnabled: true})
+	if err := server.RegisterObject(&debugMetricsObject{id: "metrics"}); err != nil {
+		t.Fatalf("register metrics object: %v", err)
+	}
+
+	if tick := server.Runtime().Advance(); tick != 1 {
+		t.Fatalf("expected tick 1, got %d", tick)
+	}
+
+	state := server.DebugState()
+	metrics := state.Runtime.Metrics
+	if metrics.TicksAdvanced != 1 {
+		t.Fatalf("expected one advanced tick, got %#v", metrics)
+	}
+	if metrics.LastTickDurationNs <= 0 || metrics.TotalTickDurationNs < metrics.LastTickDurationNs {
+		t.Fatalf("expected positive tick duration metrics, got %#v", metrics)
+	}
+	if metrics.LastTickDurationMs <= 0 || metrics.AverageTickDurationMs <= 0 {
+		t.Fatalf("expected millisecond tick duration metrics, got %#v", metrics)
+	}
+}
+
 // TestDebugHandlerServesStateAndUI verifies that the debug HTTP handler serves API and asset routes.
 func TestDebugHandlerServesStateAndUI(t *testing.T) {
 	server := network.NewServer(network.Config{DebugEnabled: true})
@@ -84,6 +108,10 @@ func TestDebugHandlerServesStateAndUI(t *testing.T) {
 	}
 	if state.Config.DebugAddress == "" {
 		t.Fatalf("expected normalized debug config in response")
+	}
+	body := stateResponse.Body.String()
+	if !strings.Contains(body, "\"metrics\"") || !strings.Contains(body, "\"snapshotEncodeCount\"") {
+		t.Fatalf("expected debug JSON to include metrics fields: %s", body)
 	}
 
 	uiResponse := httptest.NewRecorder()
@@ -143,3 +171,21 @@ func hasCapability(object network.DebugObjectState, capability string) bool {
 
 	return false
 }
+
+type debugMetricsObject struct {
+	id string
+}
+
+func (object *debugMetricsObject) ObjectType() string {
+	return "debug-metrics"
+}
+
+func (object *debugMetricsObject) ObjectID() string {
+	return object.id
+}
+
+func (object *debugMetricsObject) Snapshot() any {
+	return map[string]string{"id": object.id}
+}
+
+func (object *debugMetricsObject) OnTick(ctx network.TickContext) {}

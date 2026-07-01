@@ -165,7 +165,7 @@ The runtime owns a generic per-client input buffer keyed by target tick. The buf
 
 `Config.MaxInputPastTicks` rejects stale input, `Config.MaxInputFutureTicks` rejects inputs too far ahead of the current runtime tick, and `Config.InputBufferLimit` caps retained inputs per client. Accepted inputs are sorted deterministically by tick, sequence, object type, object ID, and target ID. Game code typically consumes inputs during `OnTick` with `Runtime.ConsumeClientInputs`, `ConsumeClientInputsForTick`, `ConsumeClientInputsForObject`, or `ConsumeClientInputsForObjectAtTick`.
 
-Debug state exposes cumulative input-buffer metrics under `runtime.inputBuffer`: buffered, consumed, stale rejected, future rejected, and dropped.
+Debug state exposes cumulative input-buffer metrics under `runtime.inputBuffer`: buffered, consumed, stale rejected, future rejected, and dropped. Runtime tick timing is exposed under `runtime.metrics` as total, last, max, and average tick duration fields in nanoseconds and milliseconds.
 
 ## Reliable Delivery Model
 
@@ -203,7 +203,7 @@ Oversized immediate responses return `ErrUDPPacketTooLarge` to the caller that a
 
 `Config.EnableBandwidthBudget` adds a per-client token bucket refilled at `ClientBytesPerSecond` bytes per second. The bucket capacity is the same value, so clients can burst up to one second of budget. Immediate protocol responses, snapshots, and reliable retransmits all reserve bytes before writing.
 
-Traffic has generic priority metadata. Built-in protocol responses use high or essential priority, application responses can use `network.Prioritize*` wrappers, and snapshot objects can implement `SnapshotPriorityProvider`. When budget is exhausted, non-deferrable lower-priority responses are dropped, while snapshots and reliable retransmits are deferred. Budget counters are exposed through the UDP debug state.
+Traffic has generic priority metadata. Built-in protocol responses use high or essential priority, application responses can use `network.Prioritize*` wrappers, and snapshot objects can implement `SnapshotPriorityProvider`. When budget is exhausted, non-deferrable lower-priority responses are dropped, while snapshots and reliable retransmits are deferred. Budget counters are exposed through the UDP debug state, alongside outbound byte totals and snapshot encode duration metrics.
 
 ## Extension Points
 
