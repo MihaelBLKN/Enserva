@@ -11,14 +11,23 @@ Enserva does not define environment-variable or file-based configuration.
 
 `network.Config` controls the core runtime and UDP transport:
 
-| Field           | Type            | Default           | Description                                            |
-| --------------- | --------------- | ----------------- | ------------------------------------------------------ |
-| `UDPAddress`    | `string`        | `":9000"`         | Address passed to the UDP listener.                    |
-| `TickRate`      | `int`           | `128`             | Number of simulation ticks per second.                 |
-| `SnapshotRate`  | `int`           | `20`              | Number of snapshot broadcasts per second.              |
-| `ClientTimeout` | `time.Duration` | `5 * time.Second` | Duration after which inactive UDP clients are removed. |
-| `DebugEnabled`  | `bool`          | `false`           | Starts the browser debug UI when the server starts.    |
-| `DebugAddress`  | `string`        | `":9100"`         | Address passed to the debug HTTP listener.             |
+| Field                  | Type            | Default           | Description                                                              |
+| ---------------------- | --------------- | ----------------- | ------------------------------------------------------------------------ |
+| `UDPAddress`           | `string`        | `":9000"`         | Address passed to the UDP listener.                                      |
+| `TickRate`             | `int`           | `128`             | Number of simulation ticks per second.                                   |
+| `SnapshotRate`         | `int`           | `20`              | Number of snapshot broadcasts per second.                                |
+| `EnableDeltaSnapshots` | `bool`          | `false`           | Enables per-client delta snapshots after each client's first full state. |
+| `FullSnapshotInterval` | `int`           | `64`              | Maximum emitted snapshots in a delta baseline cycle, including the full. |
+| `ClientTimeout`        | `time.Duration` | `5 * time.Second` | Duration after which inactive UDP clients are removed.                   |
+| `MaxUDPPacketSize`     | `int`           | `1200`            | Maximum serialized outbound UDP payload size in bytes.                   |
+| `ReliableRetryInterval` | `time.Duration` | `100 * time.Millisecond` | How long UDP waits before retransmitting an unacknowledged reliable wire message. |
+| `ReliableMaxAttempts`  | `int`           | `5`               | Maximum send attempts for one reliable wire message, including the first send. |
+| `ReliableQueueLimit`   | `int`           | `64`              | Maximum pending outgoing reliable messages per UDP client.               |
+| `MaxInputFutureTicks`  | `uint64`        | `8`               | Largest accepted client input tick ahead of the current runtime tick.    |
+| `MaxInputPastTicks`    | `uint64`        | `2`               | Largest accepted client input tick behind the current runtime tick.      |
+| `InputBufferLimit`     | `int`           | `256`             | Maximum buffered inputs retained per client.                             |
+| `DebugEnabled`         | `bool`          | `false`           | Starts the browser debug UI when the server starts.                      |
+| `DebugAddress`         | `string`        | `":9100"`         | Address passed to the debug HTTP listener.                               |
 
 Use `network.DefaultConfig()` for defaults:
 
@@ -29,6 +38,15 @@ Use `network.DefaultConfig()` for defaults:
     config.UDPAddress = ":9100"
     config.TickRate = 60
     config.SnapshotRate = 10
+    config.EnableDeltaSnapshots = true
+    config.FullSnapshotInterval = 32
+    config.MaxUDPPacketSize = 1200
+    config.ReliableRetryInterval = 100 * time.Millisecond
+    config.ReliableMaxAttempts = 5
+    config.ReliableQueueLimit = 64
+    config.MaxInputFutureTicks = 8
+    config.MaxInputPastTicks = 2
+    config.InputBufferLimit = 256
 
     server := network.NewServer(config)
     ```
@@ -50,24 +68,34 @@ Use `network.DefaultConfig()` for defaults:
 
 `Config.Normalized()` applies defaults and guards invalid values:
 
-| Input condition           | Result                                 |
-| ------------------------- | -------------------------------------- |
-| Empty `UDPAddress`        | Uses `":9000"`.                        |
-| `TickRate <= 0`           | Uses `128`.                            |
-| `SnapshotRate <= 0`       | Uses `20`.                             |
-| `SnapshotRate > TickRate` | Clamps snapshot rate to the tick rate. |
-| `ClientTimeout <= 0`      | Uses `5s`.                             |
-| Empty `DebugAddress`      | Uses `":9100"`.                        |
+| Input condition              | Result                                      |
+| ---------------------------- | ------------------------------------------- |
+| Empty `UDPAddress`           | Uses `":9000"`.                             |
+| `TickRate <= 0`              | Uses `128`.                                 |
+| `SnapshotRate <= 0`          | Uses `20`.                                  |
+| `SnapshotRate > TickRate`    | Clamps snapshot rate to the tick rate.      |
+| `FullSnapshotInterval <= 0`  | Uses `64`.                                  |
+| `ClientTimeout <= 0`         | Uses `5s`.                                  |
+| `MaxUDPPacketSize <= 0`      | Uses `1200`.                                |
+| `MaxUDPPacketSize > 65507`   | Clamps to the maximum UDP payload size.     |
+| `ReliableRetryInterval <= 0` | Uses `100ms`.                               |
+| `ReliableMaxAttempts <= 0`   | Uses `5`.                                   |
+| `ReliableQueueLimit <= 0`    | Uses `64`.                                  |
+| `MaxInputFutureTicks == 0`   | Uses `8`.                                   |
+| `MaxInputPastTicks == 0`     | Uses `2`.                                   |
+| `InputBufferLimit <= 0`      | Uses `256`.                                 |
+| Empty `DebugAddress`         | Uses `":9100"`.                             |
 
 !!! tip
 `NewServer` and `NewRuntime` both normalize the config before storing it.
 
 ## Derived Timing
 
-| Method                   | Purpose                                        |
-| ------------------------ | ---------------------------------------------- |
-| `Config.TickInterval()`  | Returns `time.Second / TickRate`.              |
-| `Config.SnapshotEvery()` | Returns the number of ticks between snapshots. |
+| Method                         | Purpose                                                                    |
+| ------------------------------ | -------------------------------------------------------------------------- |
+| `Config.TickInterval()`        | Returns `time.Second / TickRate`.                                          |
+| `Config.SnapshotEvery()`       | Returns the number of ticks between snapshots.                             |
+| `Config.FullSnapshotEvery()`   | Returns the normalized full snapshot interval for delta baseline cycling.  |
 
 Example:
 
@@ -97,18 +125,27 @@ Example:
 
 The root `main.go` exposes these flags:
 
-| Flag              | Type       | Default | Description                                 |
-| ----------------- | ---------- | ------- | ------------------------------------------- |
-| `-udpPort`        | `int`      | `9000`  | UDP port. Converted to `Config.UDPAddress`. |
-| `-tickRate`       | `int`      | `128`   | Simulation ticks per second.                |
-| `-snapshotRate`   | `int`      | `20`    | Snapshot broadcasts per second.             |
-| `-clientTimeout`  | `duration` | `5s`    | UDP client timeout.                         |
-| `-exampleObjects` | `bool`     | `true`  | Register the sample `netObjects` package.   |
-| `-debug`          | `bool`     | `false` | Serve the browser debug interface.          |
-| `-debugAddr`      | `string`   | `:9100` | Debug interface HTTP address.               |
+| Flag                    | Type       | Default | Description                                      |
+| ----------------------- | ---------- | ------- | ------------------------------------------------ |
+| `-udpPort`              | `int`      | `9000`  | UDP port. Converted to `Config.UDPAddress`.      |
+| `-tickRate`             | `int`      | `128`   | Simulation ticks per second.                     |
+| `-snapshotRate`         | `int`      | `20`    | Snapshot broadcasts per second.                  |
+| `-deltaSnapshots`       | `bool`     | `false` | Enable per-client delta snapshots.               |
+| `-fullSnapshotInterval` | `int`      | `64`    | Maximum emitted snapshots per full/delta cycle.  |
+| `-clientTimeout`        | `duration` | `5s`    | UDP client timeout.                              |
+| `-maxUdpPacketSize`     | `int`      | `1200`  | Maximum outbound UDP payload size in bytes.      |
+| `-reliableRetryInterval` | `duration` | `100ms` | Retry interval for unacknowledged reliable wire messages. |
+| `-reliableMaxAttempts`  | `int`      | `5`     | Maximum send attempts for one reliable wire message. |
+| `-reliableQueueLimit`   | `int`      | `64`    | Maximum pending reliable messages per UDP client. |
+| `-maxInputFutureTicks`  | `uint64`   | `8`     | Maximum accepted input ticks ahead of the current runtime tick. |
+| `-maxInputPastTicks`    | `uint64`   | `2`     | Maximum accepted input ticks behind the current runtime tick. |
+| `-inputBufferLimit`     | `int`      | `256`   | Maximum buffered inputs per client.              |
+| `-exampleObjects`       | `bool`     | `true`  | Register the sample `netObjects` package.        |
+| `-debug`                | `bool`     | `false` | Serve the browser debug interface.               |
+| `-debugAddr`            | `string`   | `:9100` | Debug interface HTTP address.                    |
 
 ```bash
-go run . -udpPort 9100 -tickRate 60 -snapshotRate 10 -clientTimeout 10s
+go run . -udpPort 9100 -tickRate 60 -snapshotRate 10 -deltaSnapshots -fullSnapshotInterval 32 -clientTimeout 10s -maxUdpPacketSize 1200 -reliableRetryInterval 100ms -reliableMaxAttempts 5 -reliableQueueLimit 64 -maxInputFutureTicks 8 -maxInputPastTicks 2 -inputBufferLimit 256
 ```
 
 Launch the browser debug interface while the UDP server runs:
@@ -119,11 +156,45 @@ go run . -debug
 
 The default debug URL is `http://localhost:9100`. The interface polls `/debug/state` and displays normalized config, runtime ticks, registered factories, authentication state, interest-management data, UDP clients, transport counters, and all registered object snapshots including objects hidden from normal client snapshots.
 
+## Outbound UDP Packet Limit
+
+`Config.MaxUDPPacketSize` limits the serialized UDP payload sent by Enserva, not including IP or UDP headers. The default is 1200 bytes to avoid common internet path MTU fragmentation. You may raise it for controlled networks, but values above the maximum UDP payload size are clamped during normalization.
+
+The limit applies to both binary wire packets and legacy JSON packets. Immediate responses are checked after serialization and before `WriteToUDP`; if they exceed the limit, the response is dropped and `ErrUDPPacketTooLarge` is returned to the response caller. Snapshots are checked the same way and skipped for that client on that tick when oversized.
+
+Oversized outbound drops are logged and counted in the debug state as `udp.counters.oversizedOutboundPacketsDropped`.
+
+## Reliable UDP Delivery
+
+Reliable delivery applies only to binary wire messages that opt in with `DeliveryReliableOrdered`, `DeliveryReliableUnordered`, or `network.DeliverReliableOrdered` / `network.DeliverReliableUnordered`. Unwrapped messages, legacy JSON datagrams, player input, and snapshot traffic remain unreliable.
+
+The server keeps outgoing reliable messages in a per-client retry queue until the client acknowledges a packet sequence that carried the message. `ReliableRetryInterval` controls retry timing, `ReliableMaxAttempts` controls when an unacknowledged message is dropped, and `ReliableQueueLimit` bounds memory per client. Reliable counters are exposed under `udp.counters` as queued messages, retransmits, drops, and ack removals.
+
+## Client Input Buffering
+
+The runtime can buffer tick-aligned client input before game code consumes it. `MaxInputFutureTicks` rejects inputs too far ahead of the current runtime tick, `MaxInputPastTicks` rejects stale inputs, and `InputBufferLimit` bounds retained inputs per client. Accepted inputs are ordered by target tick and input sequence.
+
+Game code reads inputs with `Runtime.ConsumeClientInputs`, `ConsumeClientInputsForTick`, `ConsumeClientInputsForObject`, or `ConsumeClientInputsForObjectAtTick`, usually from an object's `OnTick`. These APIs return generic `ClientInput` envelopes and do not apply movement, combat, inventory, or other game behavior.
+
+Input-buffer counters are exposed in debug state as `runtime.inputBuffer.buffered`, `consumed`, `staleRejected`, `futureRejected`, and `dropped`.
+
+## Delta Snapshots
+
+By default, Enserva preserves the original behavior and sends full snapshots. When `Config.EnableDeltaSnapshots` is true, the UDP transport tracks a baseline per client connection. The first eligible snapshot is always full. Later snapshots contain only objects that spawned, changed, or despawned relative to that client's previous visible snapshot.
+
+`FullSnapshotInterval` bounds the baseline cycle. With the default interval of `64`, one full snapshot is followed by up to 63 delta snapshots before the next full snapshot refreshes the baseline. Set it to `1` to force every snapshot to be full while still leaving the delta machinery enabled.
+
+Deltas are calculated after scene filtering, snapshot visibility, and interest management. Invisible objects are not included in spawned or changed data. Objects that were previously visible and are now removed or no longer visible appear in `despawned`.
+
+The server also forces a full snapshot when no baseline exists, after authentication changes a client ID, after a client switches from JSON to wire packets, after a scene-switch request, or when an inactive UDP client is removed and later reconnects.
+
+Legacy JSON clients receive `DeltaSnapshotMessage` envelopes with `type: "snapshot.delta"`. Wire clients receive `WorldDeltaSnapshot` (`engine.delta_snapshot`). Debug counters expose total snapshots plus `fullSnapshotsSent` and `deltaSnapshotsSent`.
+
 ## UDP Wire Packets
 
 The UDP transport's primary protocol is the binary wire packet format. These buffer-backed packets start with the `ES` magic value and carry one or more registered messages, sender sequence state, acknowledgement fields, and a bounded payload buffer.
 
-The built-in registry includes hello, welcome, ping, pong, error, disconnect, object request, player input, world snapshot, and entity delta message schemas. Register game-specific messages in the `0x1000-0xffff` range for gameplay traffic instead of inventing ad hoc JSON envelopes.
+The built-in registry includes hello, welcome, ping, pong, error, disconnect, object request, player input, world snapshot, aggregate delta snapshot, and entity delta message schemas. Register game-specific messages in the `0x1000-0xffff` range for gameplay traffic instead of inventing ad hoc JSON envelopes.
 
 Use this protocol for new clients, multiplayer hot paths, custom gameplay messages, and snapshot handling. See [Wire Protocol](api/wire-protocol.md) for packet layout, message IDs, and registration examples.
 
@@ -172,6 +243,19 @@ Clients that have not sent wire packets receive snapshots as `network.SnapshotMe
 | `objects`  | Nested map of object type to object ID to object snapshot. |
 
 Objects can opt out of snapshots by implementing `SnapshotVisible() bool` and returning `false`.
+
+When delta snapshots are enabled, legacy JSON clients may also receive `network.DeltaSnapshotMessage`:
+
+| JSON field     | Description                                                              |
+| -------------- | ------------------------------------------------------------------------ |
+| `type`         | Always `snapshot.delta`.                                                 |
+| `clientId`     | ID assigned to the receiving UDP client.                                 |
+| `tick`         | Runtime tick used for the delta.                                         |
+| `lastSeq`      | Last accepted client sequence number.                                    |
+| `baselineTick` | Tick of the previous full or delta snapshot used as the baseline.        |
+| `spawned`      | Newly visible objects grouped by object type and ID.                     |
+| `changed`      | Previously visible objects whose canonical snapshot value changed.       |
+| `despawned`    | Object type and ID pairs that disappeared or became invisible to client. |
 
 ## External Configuration
 

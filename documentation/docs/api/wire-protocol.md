@@ -21,11 +21,35 @@ Each message then has:
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `message_type` | `uint16` | Stable registered message ID. |
+| `message_type` | `uint16` | Stable registered message ID, or `0x0007` for a reliable envelope. |
 | `payload_length` | `uint32` | Message payload length. |
 | `payload` | bytes | Encoded by the registered message definition. |
 
 Oversized packets, malformed lengths, and unsupported protocol versions are rejected before gameplay dispatch.
+
+## Delivery Classes
+
+Wire messages are unreliable by default. This preserves the normal UDP behavior used by high-rate traffic such as snapshots and player input. A message becomes reliable only when it is explicitly wrapped with delivery metadata or when its registered `WireMessageDefinition.Delivery` is set to a reliable class.
+
+| Delivery class | Behavior |
+| --- | --- |
+| `DeliveryUnreliable` | Original packet behavior. The message is dispatched if the packet is accepted, but it is not retried and duplicate reliable IDs are not tracked. |
+| `DeliveryReliableOrdered` | The UDP transport retries until a packet carrying the message is acknowledged or the configured attempt limit is reached. Inbound messages are dispatched to runtime handlers in reliable message ID order. |
+| `DeliveryReliableUnordered` | The UDP transport retries until acknowledgement but dispatches accepted inbound messages immediately, suppressing duplicate reliable IDs. |
+
+Reliable messages use the normal message header with `message_type = 0x0007`. The reliable envelope payload is:
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `delivery_class` | `uint8` | `1` for reliable ordered, `2` for reliable unordered. |
+| `reliable_id` | `uint64` | Monotonic non-zero ID in the sender's reliable stream. |
+| `inner_message_type` | `uint16` | Registered message ID for the wrapped payload. |
+| `inner_payload_length` | `uint32` | Wrapped payload length. |
+| `inner_payload` | bytes | Encoded by the inner message definition. |
+
+Packet `ack` and `ack_bits` still acknowledge packet sequence numbers, not reliable IDs. The server removes an outgoing reliable message from its retry queue when any packet that carried it is acknowledged. Retransmits reuse the same reliable ID inside a new packet sequence, so receivers suppress duplicates by reliable ID.
+
+Reliable ordered IDs are expected to start at `1` for a connection and increase by one for that ordered stream. If ID `3` arrives before ID `2`, dispatch waits until `2` is received. Reliable unordered delivery does not wait for gaps.
 
 ## Message ID Ranges
 
@@ -135,7 +159,52 @@ Register custom messages on the server or runtime before starting the transport:
 
 The registry owns message encoding, decoding, validation, and optional dispatch. The packet framing layer only sees message IDs and bytes, so new game messages do not require changes to UDP transport or packet parsing code.
 
-For compatibility with the existing object model, Enserva registers an engine-level `ObjectRequest` message and a small built-in `PlayerInput` adapter. Games can ignore those and register their own messages in the game range.
+To opt a registered message into reliable delivery when it is sent through the UDP response path, set the delivery field:
+
+```go
+Delivery: network.DeliveryReliableOrdered,
+```
+
+For one-off responses, wrap the response value:
+
+```go
+return ctx.Respond(network.DeliverReliableUnordered(MyReply{ID: id}))
+```
+
+Do not mark high-rate snapshots reliable unless your client protocol is designed for the extra queueing and retransmission cost.
+
+For compatibility with the existing object model, Enserva registers an engine-level `ObjectRequest` message, a small built-in `PlayerInput` adapter, and a generic tick-aligned `GenericClientInput` envelope. Games can ignore those and register their own messages in the game range.
+
+## Built-In Input Messages
+
+`engine.client_input` (`0x0107`) is a reusable input-buffer envelope:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `sequence` | `uint64` | Client input sequence. If zero, the UDP packet sequence is used by the server buffer. |
+| `tick` | `uint64` | Intended simulation/client tick. If zero, the current server tick is used. |
+| `object_type` | string | Optional target object type. |
+| `object_id` | string | Optional target object ID. |
+| `target_id` | string | Optional target ID when the input is not tied to one object key. |
+| `payload` | bytes | Opaque game-defined input bytes. |
+
+The UDP transport buffers `GenericClientInput` by client ID and target tick instead of routing it to object request handlers. Game code consumes buffered inputs from `Runtime.ConsumeClientInputs*` APIs during ticks.
+
+`engine.player_input` (`0x0101`) now carries optional `sequence` and `tick` fields before the existing axes. The decoder still accepts the legacy payload shape of `object_id + x/y/z`; unticked legacy player input is also adapted into the original `player/input` object request path for compatibility. Ticked `PlayerInput` is buffered for runtime consumption.
+
+## Built-In Snapshot Messages
+
+The UDP server sends `engine.world_snapshot` (`0x0102`) for full snapshots. When `Config.EnableDeltaSnapshots` is enabled and a client already has a baseline, it sends `engine.delta_snapshot` (`0x0106`) until `FullSnapshotInterval` forces the next full snapshot.
+
+Delta snapshots are calculated from the current client-visible snapshot after snapshot visibility, scene filtering, and interest management have already run. They contain:
+
+| Field | Meaning |
+| --- | --- |
+| `spawned` | Objects that are new or newly visible to the client. |
+| `changed` | Objects that existed in the previous visible snapshot but whose canonical snapshot value changed. |
+| `despawned` | Object type and ID pairs that were previously visible and are now removed or invisible. |
+
+Full snapshots are also forced when no baseline exists, after authentication changes a client ID, after scene-switch handling, after a client switches from JSON to wire packets, and after timeout/reconnect.
 
 ## Tiny UDP Examples
 
@@ -155,6 +224,8 @@ This sends one binary `engine.player_input` message (`0x0101`) inside one wire p
     defer conn.Close()
 
     input, err := network.EncodeClientMessage(network.PlayerInput{
+    	Sequence: 1,
+    	Tick:     120,
     	ObjectID: "player-1",
     	X:        1,
     	Y:        0,

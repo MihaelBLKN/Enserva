@@ -130,6 +130,7 @@ function renderConfig(config) {
     ["Snapshot rate", config.snapshotRate + "/s"],
     ["Snapshot every", config.snapshotEvery + " ticks"],
     ["Client timeout", config.clientTimeout],
+    ["Max UDP packet", number(config.maxUdpPacketSize) + " bytes"],
     ["Debug enabled", config.debugEnabled],
     ["Debug address", config.debugAddress],
     ["Debug URL", config.debugUrl]
@@ -178,6 +179,11 @@ function renderUDP(udp) {
     ["Auth tries", counters.authAttempts],
     ["Auth ok", counters.authSuccesses],
     ["Snapshots", counters.snapshotsSent],
+    ["Oversized", counters.oversizedOutboundPacketsDropped],
+    ["Reliable queued", counters.reliableMessagesQueued],
+    ["Reliable retries", counters.reliableRetransmits],
+    ["Reliable drops", counters.reliableDrops],
+    ["Reliable acks", counters.reliableAckRemovals],
     ["Clients made", counters.clientsCreated]
   ];
   const counterHTML = "<div class=\"mini-grid\">" + counterNames.map(function(item) {
@@ -185,7 +191,7 @@ function renderUDP(udp) {
   }).join("") + "</div>";
 
   const clients = (udp.clients || []).map(function(client) {
-    return ["Address", client.address, "ID", client.id, "Connection", client.connectionId, "Authenticated", client.authenticated, "Last seq", client.lastSeq, "Idle", client.idle];
+    return ["Address", client.address, "ID", client.id, "Connection", client.connectionId, "Authenticated", client.authenticated, "Last seq", client.lastSeq, "Reliable queued", client.reliableQueued, "Idle", client.idle];
   }).map(function(rows) {
     const pairs = [];
     for (let i = 0; i < rows.length; i += 2) pairs.push([rows[i], rows[i + 1]]);

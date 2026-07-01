@@ -99,6 +99,9 @@ func (server *Server) ListenAndServeUDP() error {
 
 	log.Printf("Enserva UDP API running on %s", server.config.UDPAddress)
 	log.Printf("Tick rate: %d/s, snapshots: %d/s", server.config.TickRate, server.config.SnapshotRate)
+	if server.config.EnableDeltaSnapshots {
+		log.Printf("Delta snapshots enabled, full snapshot interval: %d snapshots", server.config.FullSnapshotInterval)
+	}
 
 	return udpServer.ListenAndServe()
 }

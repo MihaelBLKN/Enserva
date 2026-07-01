@@ -11,9 +11,9 @@ Enserva's primary client protocol is the binary wire protocol: buffer-backed wir
 - Authoritative server-side object registry.
 - Configurable tick rate and snapshot rate.
 - Optional object hooks for initialization, per-tick updates, once-per-second updates, client requests, authentication, and snapshot visibility.
-- UDP transport with binary wire packets, request sequencing, client tracking, authentication gating, and legacy JSON compatibility.
+- UDP transport with MTU-safe outbound packet limits, binary wire packets, request sequencing, client tracking, authentication gating, and legacy JSON compatibility.
 - Server-side object factories for controlled object creation.
-- Snapshot broadcasting grouped by object type and object ID.
+- Snapshot broadcasting grouped by object type and object ID, with optional per-client delta snapshots.
 - Per-client interest management for filtering snapshot objects with a spatial hash.
 - Scene management for rooms, maps, shards, scene switches, and scene-filtered snapshots.
 - Optional browser debug UI for runtime state, config, UDP clients, features, and object snapshots.
@@ -52,7 +52,7 @@ Run the included example host:
 go run .
 ```
 
-Useful flags include `-udpPort`, `-tickRate`, `-snapshotRate`, `-clientTimeout`, `-exampleObjects`, `-debug`, and `-debugAddr`.
+Useful flags include `-udpPort`, `-tickRate`, `-snapshotRate`, `-deltaSnapshots`, `-fullSnapshotInterval`, `-clientTimeout`, `-maxUdpPacketSize`, `-reliableRetryInterval`, `-reliableMaxAttempts`, `-reliableQueueLimit`, `-maxInputFutureTicks`, `-maxInputPastTicks`, `-inputBufferLimit`, `-exampleObjects`, `-debug`, and `-debugAddr`.
 
 Launch the debug interface:
 

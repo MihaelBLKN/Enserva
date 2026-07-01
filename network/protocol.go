@@ -6,29 +6,52 @@ import (
 )
 
 const (
-	defaultTickRate      = 128
-	defaultSnapshotRate  = 20
-	defaultClientTimeout = 5 * time.Second
-	defaultDebugAddress  = ":9100"
+	defaultTickRate             = 128
+	defaultSnapshotRate         = 20
+	defaultClientTimeout        = 5 * time.Second
+	defaultDebugAddress         = ":9100"
+	defaultMaxUDPPacketSize     = 1200
+	defaultFullSnapshotInterval = 64
+	defaultMaxInputFutureTicks  = 8
+	defaultMaxInputPastTicks    = 2
+	defaultInputBufferLimit     = 256
+	maxUDPPacketSize            = 65507
 )
 
 type Config struct {
-	UDPAddress    string
-	TickRate      int
-	SnapshotRate  int
-	ClientTimeout time.Duration
-	DebugEnabled  bool
-	DebugAddress  string
+	UDPAddress            string
+	TickRate              int
+	SnapshotRate          int
+	EnableDeltaSnapshots  bool
+	FullSnapshotInterval  int
+	ClientTimeout         time.Duration
+	MaxUDPPacketSize      int
+	ReliableRetryInterval time.Duration
+	ReliableMaxAttempts   int
+	ReliableQueueLimit    int
+	MaxInputFutureTicks   uint64
+	MaxInputPastTicks     uint64
+	InputBufferLimit      int
+	DebugEnabled          bool
+	DebugAddress          string
 }
 
 // DefaultConfig returns the default server configuration.
 func DefaultConfig() Config {
 	return Config{
-		UDPAddress:    ":9000",
-		TickRate:      defaultTickRate,
-		SnapshotRate:  defaultSnapshotRate,
-		ClientTimeout: defaultClientTimeout,
-		DebugAddress:  defaultDebugAddress,
+		UDPAddress:            ":9000",
+		TickRate:              defaultTickRate,
+		SnapshotRate:          defaultSnapshotRate,
+		FullSnapshotInterval:  defaultFullSnapshotInterval,
+		ClientTimeout:         defaultClientTimeout,
+		MaxUDPPacketSize:      defaultMaxUDPPacketSize,
+		ReliableRetryInterval: defaultReliableRetryInterval,
+		ReliableMaxAttempts:   defaultReliableMaxAttempts,
+		ReliableQueueLimit:    defaultReliableQueueLimit,
+		MaxInputFutureTicks:   defaultMaxInputFutureTicks,
+		MaxInputPastTicks:     defaultMaxInputPastTicks,
+		InputBufferLimit:      defaultInputBufferLimit,
+		DebugAddress:          defaultDebugAddress,
 	}
 }
 
@@ -48,8 +71,35 @@ func (config Config) Normalized() Config {
 	if config.SnapshotRate > config.TickRate {
 		config.SnapshotRate = config.TickRate
 	}
+	if config.FullSnapshotInterval <= 0 {
+		config.FullSnapshotInterval = defaults.FullSnapshotInterval
+	}
 	if config.ClientTimeout <= 0 {
 		config.ClientTimeout = defaults.ClientTimeout
+	}
+	if config.MaxUDPPacketSize <= 0 {
+		config.MaxUDPPacketSize = defaults.MaxUDPPacketSize
+	}
+	if config.MaxUDPPacketSize > maxUDPPacketSize {
+		config.MaxUDPPacketSize = maxUDPPacketSize
+	}
+	if config.ReliableRetryInterval <= 0 {
+		config.ReliableRetryInterval = defaults.ReliableRetryInterval
+	}
+	if config.ReliableMaxAttempts <= 0 {
+		config.ReliableMaxAttempts = defaults.ReliableMaxAttempts
+	}
+	if config.ReliableQueueLimit <= 0 {
+		config.ReliableQueueLimit = defaults.ReliableQueueLimit
+	}
+	if config.MaxInputFutureTicks == 0 {
+		config.MaxInputFutureTicks = defaults.MaxInputFutureTicks
+	}
+	if config.MaxInputPastTicks == 0 {
+		config.MaxInputPastTicks = defaults.MaxInputPastTicks
+	}
+	if config.InputBufferLimit <= 0 {
+		config.InputBufferLimit = defaults.InputBufferLimit
 	}
 	if config.DebugAddress == "" {
 		config.DebugAddress = defaults.DebugAddress
@@ -75,6 +125,14 @@ func (config Config) SnapshotEvery() uint64 {
 	}
 
 	return uint64(every)
+}
+
+// FullSnapshotEvery returns the maximum number of emitted snapshots in a delta
+// baseline cycle. A value of 1 forces every emitted snapshot to be full.
+func (config Config) FullSnapshotEvery() uint64 {
+	config = config.Normalized()
+
+	return uint64(config.FullSnapshotInterval)
 }
 
 // Object is the minimal interface for values managed by the runtime.
@@ -148,6 +206,36 @@ type SnapshotMessage struct {
 	Tick         uint64       `json:"tick"`
 	LastSequence uint64       `json:"lastSeq,omitempty"`
 	Objects      SnapshotData `json:"objects"`
+}
+
+// SnapshotObjectRef identifies an object in a snapshot delta.
+type SnapshotObjectRef struct {
+	ObjectType string `json:"objectType"`
+	ObjectID   string `json:"objectId"`
+}
+
+// SnapshotDelta contains the changes from one visible snapshot to the next.
+type SnapshotDelta struct {
+	Spawned   SnapshotData        `json:"spawned,omitempty"`
+	Changed   SnapshotData        `json:"changed,omitempty"`
+	Despawned []SnapshotObjectRef `json:"despawned,omitempty"`
+}
+
+// Empty reports whether the delta contains no visible changes.
+func (delta SnapshotDelta) Empty() bool {
+	return len(delta.Spawned) == 0 && len(delta.Changed) == 0 && len(delta.Despawned) == 0
+}
+
+// DeltaSnapshotMessage is the legacy JSON envelope for a per-client snapshot delta.
+type DeltaSnapshotMessage struct {
+	Type         string              `json:"type"`
+	ClientID     string              `json:"clientId,omitempty"`
+	Tick         uint64              `json:"tick"`
+	LastSequence uint64              `json:"lastSeq,omitempty"`
+	BaselineTick uint64              `json:"baselineTick,omitempty"`
+	Spawned      SnapshotData        `json:"spawned,omitempty"`
+	Changed      SnapshotData        `json:"changed,omitempty"`
+	Despawned    []SnapshotObjectRef `json:"despawned,omitempty"`
 }
 
 // ResponseMessage is the standard request response envelope.

@@ -13,40 +13,60 @@ import (
 
 // UDPServer serves the runtime protocol over UDP.
 type UDPServer struct {
-	address           string
-	clients           map[string]*UDPClient
-	runtime           *Runtime
-	startedAt         time.Time
-	datagramsReceived uint64
-	requestsAccepted  uint64
-	requestsDropped   uint64
-	requestErrors     uint64
-	authAttempts      uint64
-	authSuccesses     uint64
-	authFailures      uint64
-	snapshotsSent     uint64
-	snapshotErrors    uint64
-	clientsCreated    uint64
-	clientsRemoved    uint64
-	nextSequence      uint64
-	mu                sync.Mutex
+	address             string
+	clients             map[string]*UDPClient
+	runtime             *Runtime
+	startedAt           time.Time
+	datagramsReceived   uint64
+	requestsAccepted    uint64
+	requestsDropped     uint64
+	requestErrors       uint64
+	authAttempts        uint64
+	authSuccesses       uint64
+	authFailures        uint64
+	snapshotsSent       uint64
+	fullSnapshotsSent   uint64
+	deltaSnapshotsSent  uint64
+	snapshotErrors      uint64
+	oversizedOutbound   uint64
+	reliableQueued      uint64
+	reliableRetransmits uint64
+	reliableDrops       uint64
+	reliableAckRemovals uint64
+	clientsCreated      uint64
+	clientsRemoved      uint64
+	nextSequence        uint64
+	snapshotBaselines   map[string]udpSnapshotBaseline
+	mu                  sync.Mutex
 }
 
 // UDPClient tracks a client address and authentication state.
 type UDPClient struct {
-	addr          *net.UDPAddr
-	connectionID  string
-	id            string
-	authenticated bool
-	wireProtocol  bool
-	wireVersion   uint8
-	lastSeq       uint64
-	receivedSeqs  map[uint64]struct{}
-	peerAck       uint64
-	peerAckBits   uint64
-	ack           uint64
-	ackBits       uint64
-	lastHeardAt   time.Time
+	addr                      *net.UDPAddr
+	connectionID              string
+	id                        string
+	authenticated             bool
+	wireProtocol              bool
+	wireVersion               uint8
+	lastSeq                   uint64
+	receivedSeqs              map[uint64]struct{}
+	peerAck                   uint64
+	peerAckBits               uint64
+	ack                       uint64
+	ackBits                   uint64
+	lastHeardAt               time.Time
+	nextReliableID            uint64
+	reliableOut               map[uint64]*udpReliableOutbound
+	reliableUnorderedReceived map[uint64]struct{}
+	reliableOrderedReceived   map[uint64]struct{}
+	reliableOrderedNext       uint64
+	reliableOrderedBuffer     map[uint64]udpIncomingMessage
+}
+
+type udpSnapshotBaseline struct {
+	tick               uint64
+	snapshot           SnapshotData
+	snapshotsSinceFull uint64
 }
 
 type udpIncomingPacket struct {
@@ -62,15 +82,30 @@ type udpIncomingMessage struct {
 	messageType WireMessageType
 	request     RequestMessage
 	payload     any
+	delivery    DeliveryClass
+	deliveryID  uint64
+}
+
+type udpReliableOutbound struct {
+	message       WireMessage
+	attempts      int
+	lastSentAt    time.Time
+	sentSequences map[uint64]struct{}
+}
+
+type udpReliableTransmit struct {
+	addr    *net.UDPAddr
+	payload []byte
 }
 
 // NewUDPServer creates a UDP transport for runtime.
 func NewUDPServer(runtime *Runtime) *UDPServer {
 	return &UDPServer{
-		address:   runtime.Config().UDPAddress,
-		clients:   map[string]*UDPClient{},
-		runtime:   runtime,
-		startedAt: time.Now(),
+		address:           runtime.Config().UDPAddress,
+		clients:           map[string]*UDPClient{},
+		runtime:           runtime,
+		startedAt:         time.Now(),
+		snapshotBaselines: map[string]udpSnapshotBaseline{},
 	}
 }
 
@@ -125,20 +160,11 @@ func (server *UDPServer) handleMessage(conn *net.UDPConn, addr *net.UDPAddr, mes
 		if conn == nil {
 			return ErrResponsesUnsupported
 		}
-
-		sequence := server.nextOutgoingSequence()
-		ack, ackBits := server.clientAckState(client)
-		payload, err := server.encodeUDPResponse(responseMessage, sequence, ack, ackBits, incoming.wire)
-		if err != nil {
-			return err
-		}
-
-		_, err = conn.WriteToUDP(payload, addr)
-		return err
+		return server.sendUDPResponse(conn, addr, client, responseMessage, incoming.wire)
 	})
 
 	var firstErr error
-	for _, incomingMessage := range incoming.messages {
+	for _, incomingMessage := range server.acceptReliableIncomingMessages(client, incoming.messages) {
 		if _, ok := incomingMessage.payload.(UnknownWireMessage); ok {
 			continue
 		}
@@ -161,6 +187,13 @@ func (server *UDPServer) handleMessage(conn *net.UDPConn, addr *net.UDPAddr, mes
 			if handled {
 				continue
 			}
+		}
+		handledInput, err := server.bufferDecodedInput(client, incoming.sequence, incomingMessage.payload)
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+		if handledInput {
+			continue
 		}
 		if emptyRequestMessage(incomingMessage.request) {
 			continue
@@ -216,6 +249,8 @@ func (server *UDPServer) handleDecodedRequest(client *UDPClient, request Request
 			OK:       false,
 			Error:    err.Error(),
 		})
+	} else if isSceneSwitchAction(request.Action) {
+		server.resetSnapshotBaseline(client)
 	}
 
 	return err
@@ -310,6 +345,8 @@ func (server *UDPServer) decodeUDPWirePacket(payload []byte) (udpIncomingPacket,
 		incomingMessage := udpIncomingMessage{
 			messageType: message.Type,
 			payload:     decoded,
+			delivery:    message.Delivery,
+			deliveryID:  message.DeliveryID,
 		}
 		switch value := decoded.(type) {
 		case ClientHello:
@@ -333,6 +370,8 @@ func (server *UDPServer) decodeUDPWirePacket(payload []byte) (udpIncomingPacket,
 				ObjectID:   value.ObjectID,
 				Action:     "input",
 			}
+		case GenericClientInput:
+			incomingMessage.request = RequestMessage{}
 		}
 
 		incoming.messages = append(incoming.messages, incomingMessage)
@@ -341,8 +380,87 @@ func (server *UDPServer) decodeUDPWirePacket(payload []byte) (udpIncomingPacket,
 	return incoming, nil
 }
 
+func (server *UDPServer) bufferDecodedInput(client *UDPClient, packetSequence uint64, payload any) (bool, error) {
+	switch input := payload.(type) {
+	case PlayerInput:
+		sequence := input.Sequence
+		if sequence == 0 {
+			sequence = packetSequence
+		}
+		err := server.runtime.BufferClientInput(ClientInput{
+			ClientID:   client.id,
+			Sequence:   sequence,
+			Tick:       input.Tick,
+			ObjectType: "player",
+			ObjectID:   input.ObjectID,
+			TargetID:   input.ObjectID,
+			Payload:    input,
+			ReceivedAt: time.Now(),
+		})
+		return input.Tick != 0, err
+	case GenericClientInput:
+		sequence := input.Sequence
+		if sequence == 0 {
+			sequence = packetSequence
+		}
+		err := server.runtime.BufferClientInput(ClientInput{
+			ClientID:   client.id,
+			Sequence:   sequence,
+			Tick:       input.Tick,
+			ObjectType: input.ObjectType,
+			ObjectID:   input.ObjectID,
+			TargetID:   input.TargetID,
+			Payload:    append([]byte(nil), input.Payload...),
+			ReceivedAt: time.Now(),
+		})
+		return true, err
+	default:
+		return false, nil
+	}
+}
+
 func isWirePacket(payload []byte) bool {
 	return len(payload) >= 2 && payload[0] == byte(WireProtocolMagic>>8) && payload[1] == byte(WireProtocolMagic&0xff)
+}
+
+func (server *UDPServer) sendUDPResponse(conn *net.UDPConn, addr *net.UDPAddr, client *UDPClient, message any, wire bool) error {
+	if !wire {
+		sequence := server.nextOutgoingSequence()
+		payload, err := server.encodeUDPResponse(message, sequence, 0, 0, false)
+		if err != nil {
+			return err
+		}
+		if err := server.validateOutboundPacket("response", addr, payload); err != nil {
+			return err
+		}
+		_, err = conn.WriteToUDP(payload, addr)
+		return err
+	}
+
+	wireMessage, err := server.encodeUDPWireResponseMessage(message)
+	if err != nil {
+		return err
+	}
+	if err := server.prepareReliableMessage(client, &wireMessage); err != nil {
+		return err
+	}
+
+	sequence := server.nextOutgoingSequence()
+	ack, ackBits := server.clientAckState(client)
+	payload, err := EncodePacketWithAcks(sequence, ack, ackBits, []WireMessage{wireMessage})
+	if err != nil {
+		return err
+	}
+	if err := server.validateOutboundPacket("response", addr, payload); err != nil {
+		return err
+	}
+	if wireMessage.Delivery.reliable() {
+		if err := server.queueReliableOutbound(client, wireMessage, sequence, time.Now()); err != nil {
+			return err
+		}
+	}
+	_, err = conn.WriteToUDP(payload, addr)
+	return err
 }
 
 func (server *UDPServer) encodeUDPResponse(message any, sequence, ack, ackBits uint64, wire bool) ([]byte, error) {
@@ -358,6 +476,15 @@ func (server *UDPServer) encodeUDPResponse(message any, sequence, ack, ackBits u
 }
 
 func (server *UDPServer) encodeUDPWireResponseMessage(message any) (WireMessage, error) {
+	if delivery, ok := message.(WireDelivery); ok {
+		wireMessage, err := server.encodeUDPWireResponseMessage(delivery.Message)
+		if err != nil {
+			return WireMessage{}, err
+		}
+		wireMessage.Delivery = delivery.Class
+		return wireMessage, nil
+	}
+
 	switch value := message.(type) {
 	case AuthenticationResponse:
 		return server.runtime.WireMessages().EncodeMessage(Welcome{
@@ -372,6 +499,21 @@ func (server *UDPServer) encodeUDPWireResponseMessage(message any) (WireMessage,
 	default:
 		return server.runtime.WireMessages().EncodeMessage(message)
 	}
+}
+
+func (server *UDPServer) validateOutboundPacket(kind string, addr *net.UDPAddr, payload []byte) error {
+	limit := server.runtime.Config().MaxUDPPacketSize
+	if len(payload) <= limit {
+		return nil
+	}
+
+	server.recordOversizedOutbound()
+	target := "<unknown>"
+	if addr != nil {
+		target = addr.String()
+	}
+	log.Printf("udp %s dropped oversized outbound packet to %s: %d bytes exceeds max %d", kind, target, len(payload), limit)
+	return fmt.Errorf("%w: %d bytes exceeds max %d", ErrUDPPacketTooLarge, len(payload), limit)
 }
 
 // authenticateClient assigns an authenticated id if no other client owns it.
@@ -392,6 +534,7 @@ func (server *UDPServer) authenticateClient(client *UDPClient, authenticatedID s
 
 	client.id = authenticatedID
 	client.authenticated = true
+	delete(server.snapshotBaselines, client.connectionID)
 	return nil
 }
 
@@ -404,6 +547,7 @@ func (server *UDPServer) acceptClientRequest(addr *net.UDPAddr, sequence, ack, a
 	client.lastHeardAt = time.Now()
 	client.peerAck = ack
 	client.peerAckBits = ackBits
+	server.removeAckedReliableLocked(client, ack, ackBits)
 
 	if sequence == 0 {
 		server.requestsAccepted++
@@ -433,6 +577,10 @@ func (server *UDPServer) nextOutgoingSequence() uint64 {
 	server.mu.Lock()
 	defer server.mu.Unlock()
 
+	return server.nextOutgoingSequenceLocked()
+}
+
+func (server *UDPServer) nextOutgoingSequenceLocked() uint64 {
 	server.nextSequence++
 	return server.nextSequence
 }
@@ -442,6 +590,187 @@ func (server *UDPServer) clientAckState(client *UDPClient) (uint64, uint64) {
 	defer server.mu.Unlock()
 
 	return client.ack, client.ackBits
+}
+
+func (server *UDPServer) prepareReliableMessage(client *UDPClient, message *WireMessage) error {
+	if client == nil || message == nil || !message.Delivery.reliable() {
+		return nil
+	}
+
+	server.mu.Lock()
+	defer server.mu.Unlock()
+
+	if len(client.reliableOut) >= server.runtime.Config().ReliableQueueLimit {
+		server.reliableDrops++
+		return ErrReliableQueueFull
+	}
+	client.nextReliableID++
+	message.DeliveryID = client.nextReliableID
+	return nil
+}
+
+func (server *UDPServer) queueReliableOutbound(client *UDPClient, message WireMessage, sequence uint64, sentAt time.Time) error {
+	if client == nil || !message.Delivery.reliable() {
+		return nil
+	}
+	if message.DeliveryID == 0 {
+		return ErrReliableMessageID
+	}
+
+	server.mu.Lock()
+	defer server.mu.Unlock()
+
+	if len(client.reliableOut) >= server.runtime.Config().ReliableQueueLimit {
+		server.reliableDrops++
+		return ErrReliableQueueFull
+	}
+	client.reliableOut[message.DeliveryID] = &udpReliableOutbound{
+		message:    message,
+		attempts:   1,
+		lastSentAt: sentAt,
+		sentSequences: map[uint64]struct{}{
+			sequence: {},
+		},
+	}
+	server.reliableQueued++
+	return nil
+}
+
+func (server *UDPServer) removeAckedReliableLocked(client *UDPClient, ack, ackBits uint64) {
+	if client == nil || len(client.reliableOut) == 0 {
+		return
+	}
+
+	for deliveryID, queued := range client.reliableOut {
+		for sequence := range queued.sentSequences {
+			if packetSequenceAcked(ack, ackBits, sequence) {
+				delete(client.reliableOut, deliveryID)
+				server.reliableAckRemovals++
+				break
+			}
+		}
+	}
+}
+
+func (server *UDPServer) retransmitReliable(conn *net.UDPConn, now time.Time) {
+	if conn == nil {
+		return
+	}
+
+	for _, transmit := range server.collectReliableRetransmits(now) {
+		if err := server.validateOutboundPacket("reliable retry", transmit.addr, transmit.payload); err != nil {
+			server.recordReliableDrop()
+			continue
+		}
+		if _, err := conn.WriteToUDP(transmit.payload, transmit.addr); err != nil {
+			server.recordReliableDrop()
+			log.Println("udp reliable retry error:", err)
+		}
+	}
+}
+
+func (server *UDPServer) collectReliableRetransmits(now time.Time) []udpReliableTransmit {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+
+	config := server.runtime.Config()
+	transmits := make([]udpReliableTransmit, 0)
+	for _, client := range server.clients {
+		for deliveryID, queued := range client.reliableOut {
+			if now.Sub(queued.lastSentAt) < config.ReliableRetryInterval {
+				continue
+			}
+			if queued.attempts >= config.ReliableMaxAttempts {
+				delete(client.reliableOut, deliveryID)
+				server.reliableDrops++
+				continue
+			}
+
+			sequence := server.nextOutgoingSequenceLocked()
+			payload, err := EncodePacketWithAcks(sequence, client.ack, client.ackBits, []WireMessage{queued.message})
+			if err != nil {
+				delete(client.reliableOut, deliveryID)
+				server.reliableDrops++
+				continue
+			}
+			queued.attempts++
+			queued.lastSentAt = now
+			queued.sentSequences[sequence] = struct{}{}
+			server.reliableRetransmits++
+			transmits = append(transmits, udpReliableTransmit{
+				addr:    client.addr,
+				payload: payload,
+			})
+		}
+	}
+	return transmits
+}
+
+func (server *UDPServer) acceptReliableIncomingMessages(client *UDPClient, messages []udpIncomingMessage) []udpIncomingMessage {
+	if len(messages) == 0 {
+		return nil
+	}
+
+	server.mu.Lock()
+	defer server.mu.Unlock()
+
+	accepted := make([]udpIncomingMessage, 0, len(messages))
+	for _, message := range messages {
+		switch message.delivery {
+		case DeliveryUnreliable:
+			accepted = append(accepted, message)
+		case DeliveryReliableUnordered:
+			if message.deliveryID == 0 {
+				server.reliableDrops++
+				continue
+			}
+			if _, duplicate := client.reliableUnorderedReceived[message.deliveryID]; duplicate {
+				server.requestsDropped++
+				continue
+			}
+			client.reliableUnorderedReceived[message.deliveryID] = struct{}{}
+			accepted = append(accepted, message)
+		case DeliveryReliableOrdered:
+			if message.deliveryID == 0 {
+				server.reliableDrops++
+				continue
+			}
+			if _, duplicate := client.reliableOrderedReceived[message.deliveryID]; duplicate {
+				server.requestsDropped++
+				continue
+			}
+			if _, duplicate := client.reliableOrderedBuffer[message.deliveryID]; duplicate {
+				server.requestsDropped++
+				continue
+			}
+			if message.deliveryID > client.reliableOrderedNext {
+				client.reliableOrderedBuffer[message.deliveryID] = message
+				continue
+			}
+			if message.deliveryID < client.reliableOrderedNext {
+				server.requestsDropped++
+				continue
+			}
+
+			accepted = append(accepted, message)
+			client.reliableOrderedReceived[message.deliveryID] = struct{}{}
+			client.reliableOrderedNext++
+			for {
+				buffered, ok := client.reliableOrderedBuffer[client.reliableOrderedNext]
+				if !ok {
+					break
+				}
+				delete(client.reliableOrderedBuffer, client.reliableOrderedNext)
+				accepted = append(accepted, buffered)
+				client.reliableOrderedReceived[buffered.deliveryID] = struct{}{}
+				client.reliableOrderedNext++
+			}
+		default:
+			server.reliableDrops++
+		}
+	}
+
+	return accepted
 }
 
 func clientAckBitsLocked(client *UDPClient) uint64 {
@@ -478,6 +807,9 @@ func (server *UDPServer) markWireClient(client *UDPClient, version uint8) {
 	server.mu.Lock()
 	defer server.mu.Unlock()
 
+	if !client.wireProtocol {
+		delete(server.snapshotBaselines, client.connectionID)
+	}
 	client.wireProtocol = true
 	client.wireVersion = version
 }
@@ -491,11 +823,16 @@ func (server *UDPServer) getOrCreateClientLocked(addr *net.UDPAddr) *UDPClient {
 	}
 
 	client = &UDPClient{
-		addr:         addr,
-		connectionID: "udp-" + key,
-		id:           "udp-" + key,
-		receivedSeqs: map[uint64]struct{}{},
-		lastHeardAt:  time.Now(),
+		addr:                      addr,
+		connectionID:              "udp-" + key,
+		id:                        "udp-" + key,
+		receivedSeqs:              map[uint64]struct{}{},
+		lastHeardAt:               time.Now(),
+		reliableOut:               map[uint64]*udpReliableOutbound{},
+		reliableUnorderedReceived: map[uint64]struct{}{},
+		reliableOrderedReceived:   map[uint64]struct{}{},
+		reliableOrderedNext:       1,
+		reliableOrderedBuffer:     map[uint64]udpIncomingMessage{},
 	}
 	server.clients[key] = client
 	server.clientsCreated++
@@ -518,7 +855,9 @@ func (server *UDPServer) runTickLoop(conn *net.UDPConn) {
 // advanceAndMaybeBroadcast advances the runtime and sends snapshots on snapshot ticks.
 func (server *UDPServer) advanceAndMaybeBroadcast(conn *net.UDPConn) error {
 	tick := server.runtime.Advance()
-	server.removeStaleClients(time.Now())
+	now := time.Now()
+	server.removeStaleClients(now)
+	server.retransmitReliable(conn, now)
 
 	if tick%server.runtime.Config().SnapshotEvery() != 0 {
 		return nil
@@ -535,7 +874,7 @@ func (server *UDPServer) advanceAndMaybeBroadcast(conn *net.UDPConn) error {
 			log.Println("udp broadcast error:", err)
 			continue
 		}
-		server.recordSnapshotSent()
+		server.recordSnapshotSent(snapshot.kind)
 	}
 
 	return nil
@@ -544,6 +883,7 @@ func (server *UDPServer) advanceAndMaybeBroadcast(conn *net.UDPConn) error {
 type udpSnapshot struct {
 	addr    *net.UDPAddr
 	payload []byte
+	kind    string
 }
 
 // snapshots builds one serialized snapshot per eligible client.
@@ -555,29 +895,49 @@ func (server *UDPServer) snapshots() ([]udpSnapshot, error) {
 	for _, client := range clients {
 		objects := server.runtime.SnapshotForClient(client.id)
 		sequence := server.nextOutgoingSequence()
-		payload, err := server.encodeUDPSnapshot(client, sequence, tick, objects)
+		payload, kind, err := server.encodeUDPSnapshot(client, sequence, tick, objects)
 		if err != nil {
 			return nil, err
 		}
+		if err := server.validateOutboundPacket("snapshot", client.addr, payload); err != nil {
+			if errors.Is(err, ErrUDPPacketTooLarge) {
+				continue
+			}
+			return nil, err
+		}
 
+		server.commitSnapshotBaseline(client, tick, objects, kind)
 		snapshots = append(snapshots, udpSnapshot{
 			addr:    client.addr,
 			payload: payload,
+			kind:    kind,
 		})
 	}
 
 	return snapshots, nil
 }
 
-func (server *UDPServer) encodeUDPSnapshot(client UDPClient, sequence, tick uint64, objects SnapshotData) ([]byte, error) {
+func (server *UDPServer) encodeUDPSnapshot(client UDPClient, sequence, tick uint64, objects SnapshotData) ([]byte, string, error) {
+	kind := "full"
+	baseline, hasBaseline := server.snapshotBaseline(client.connectionID)
+	if server.runtime.Config().EnableDeltaSnapshots && hasBaseline && !server.shouldSendFullSnapshot(baseline) {
+		kind = "delta"
+	}
+
+	if kind == "delta" {
+		delta := BuildSnapshotDelta(baseline.snapshot, objects)
+		return server.encodeUDPDeltaSnapshot(client, sequence, tick, baseline.tick, delta)
+	}
+
 	if !client.wireProtocol {
-		return json.Marshal(SnapshotMessage{
+		payload, err := json.Marshal(SnapshotMessage{
 			Type:         "snapshot",
 			ClientID:     client.id,
 			Tick:         tick,
 			LastSequence: client.lastSeq,
 			Objects:      objects,
 		})
+		return payload, kind, err
 	}
 
 	message, err := server.runtime.WireMessages().EncodeMessage(WorldSnapshot{
@@ -587,9 +947,90 @@ func (server *UDPServer) encodeUDPSnapshot(client UDPClient, sequence, tick uint
 		Objects:      objects,
 	})
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return EncodePacketWithAcks(sequence, client.ack, client.ackBits, []WireMessage{message})
+	payload, err := EncodePacketWithAcks(sequence, client.ack, client.ackBits, []WireMessage{message})
+	return payload, kind, err
+}
+
+func (server *UDPServer) encodeUDPDeltaSnapshot(client UDPClient, sequence, tick, baselineTick uint64, delta SnapshotDelta) ([]byte, string, error) {
+	kind := "delta"
+	if !client.wireProtocol {
+		payload, err := json.Marshal(DeltaSnapshotMessage{
+			Type:         "snapshot.delta",
+			ClientID:     client.id,
+			Tick:         tick,
+			LastSequence: client.lastSeq,
+			BaselineTick: baselineTick,
+			Spawned:      delta.Spawned,
+			Changed:      delta.Changed,
+			Despawned:    delta.Despawned,
+		})
+		return payload, kind, err
+	}
+
+	message, err := server.runtime.WireMessages().EncodeMessage(WorldDeltaSnapshot{
+		ClientID:     client.id,
+		Tick:         tick,
+		LastSequence: client.lastSeq,
+		BaselineTick: baselineTick,
+		Spawned:      delta.Spawned,
+		Changed:      delta.Changed,
+		Despawned:    delta.Despawned,
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	payload, err := EncodePacketWithAcks(sequence, client.ack, client.ackBits, []WireMessage{message})
+	return payload, kind, err
+}
+
+func (server *UDPServer) snapshotBaseline(connectionID string) (udpSnapshotBaseline, bool) {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+
+	baseline, ok := server.snapshotBaselines[connectionID]
+	return baseline, ok
+}
+
+func (server *UDPServer) shouldSendFullSnapshot(baseline udpSnapshotBaseline) bool {
+	interval := server.runtime.Config().FullSnapshotEvery()
+	if interval <= 1 {
+		return true
+	}
+	return baseline.snapshotsSinceFull+1 >= interval
+}
+
+func (server *UDPServer) commitSnapshotBaseline(client UDPClient, tick uint64, objects SnapshotData, kind string) {
+	if !server.runtime.Config().EnableDeltaSnapshots {
+		return
+	}
+
+	server.mu.Lock()
+	defer server.mu.Unlock()
+
+	snapshotsSinceFull := uint64(0)
+	if kind == "delta" {
+		if previous, ok := server.snapshotBaselines[client.connectionID]; ok {
+			snapshotsSinceFull = previous.snapshotsSinceFull + 1
+		}
+	}
+	server.snapshotBaselines[client.connectionID] = udpSnapshotBaseline{
+		tick:               tick,
+		snapshot:           CloneSnapshotData(objects),
+		snapshotsSinceFull: snapshotsSinceFull,
+	}
+}
+
+func (server *UDPServer) resetSnapshotBaseline(client *UDPClient) {
+	if client == nil {
+		return
+	}
+
+	server.mu.Lock()
+	defer server.mu.Unlock()
+
+	delete(server.snapshotBaselines, client.connectionID)
 }
 
 // removeStaleClients drops clients that have exceeded the configured timeout.
@@ -600,6 +1041,7 @@ func (server *UDPServer) removeStaleClients(now time.Time) {
 	timeout := server.runtime.Config().ClientTimeout
 	for key, client := range server.clients {
 		if now.Sub(client.lastHeardAt) > timeout {
+			delete(server.snapshotBaselines, client.connectionID)
 			delete(server.clients, key)
 			server.clientsRemoved++
 		}
@@ -670,12 +1112,17 @@ func (server *UDPServer) recordAuthFailure() {
 	server.authFailures++
 }
 
-// recordSnapshotSent increments the sent snapshot counter.
-func (server *UDPServer) recordSnapshotSent() {
+// recordSnapshotSent increments the sent snapshot counters.
+func (server *UDPServer) recordSnapshotSent(kind string) {
 	server.mu.Lock()
 	defer server.mu.Unlock()
 
 	server.snapshotsSent++
+	if kind == "delta" {
+		server.deltaSnapshotsSent++
+		return
+	}
+	server.fullSnapshotsSent++
 }
 
 // recordSnapshotError increments the snapshot error counter.
@@ -684,4 +1131,19 @@ func (server *UDPServer) recordSnapshotError() {
 	defer server.mu.Unlock()
 
 	server.snapshotErrors++
+}
+
+// recordOversizedOutbound increments the oversized outbound packet drop counter.
+func (server *UDPServer) recordOversizedOutbound() {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+
+	server.oversizedOutbound++
+}
+
+func (server *UDPServer) recordReliableDrop() {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+
+	server.reliableDrops++
 }

@@ -82,6 +82,7 @@ type WireMessageDefinition struct {
 	ID          WireMessageType
 	Name        string
 	Direction   WireMessageDirection
+	Delivery    DeliveryClass
 	MessageType reflect.Type
 	Encode      WireMessageEncoder
 	Decode      WireMessageDecoder
@@ -179,12 +180,29 @@ func NewDefaultWireMessageRegistry() *WireMessageRegistry {
 		Validate:    validatePlayerInput,
 	})
 	mustRegisterWireMessage(registry, WireMessageDefinition{
+		ID:          WireMessageClientInput,
+		Name:        "engine.client_input",
+		Direction:   WireDirectionClientToServer,
+		MessageType: reflect.TypeOf(GenericClientInput{}),
+		Encode:      encodeGenericClientInputAny,
+		Decode:      decodeGenericClientInputAny,
+		Validate:    validateGenericClientInput,
+	})
+	mustRegisterWireMessage(registry, WireMessageDefinition{
 		ID:          WireMessageWorldSnapshot,
 		Name:        "engine.world_snapshot",
 		Direction:   WireDirectionServerToClient,
 		MessageType: reflect.TypeOf(WorldSnapshot{}),
 		Encode:      encodeWorldSnapshotAny,
 		Decode:      decodeWorldSnapshotAny,
+	})
+	mustRegisterWireMessage(registry, WireMessageDefinition{
+		ID:          WireMessageDeltaSnapshot,
+		Name:        "engine.delta_snapshot",
+		Direction:   WireDirectionServerToClient,
+		MessageType: reflect.TypeOf(WorldDeltaSnapshot{}),
+		Encode:      encodeWorldDeltaSnapshotAny,
+		Decode:      decodeWorldDeltaSnapshotAny,
 	})
 	mustRegisterWireMessage(registry, WireMessageDefinition{
 		ID:          WireMessageEntitySpawn,
@@ -236,6 +254,9 @@ func (registry *WireMessageRegistry) Register(definition WireMessageDefinition) 
 	}
 	if definition.Encode == nil || definition.Decode == nil {
 		return ErrMissingWireMessageCodec
+	}
+	if err := validateDeliveryClass(definition.Delivery); err != nil {
+		return err
 	}
 	if !wireMessageIDInKnownRange(definition.ID) {
 		return fmt.Errorf("%w: 0x%04x", ErrWireMessageTypeOutOfRange, definition.ID)
@@ -301,7 +322,7 @@ func (registry *WireMessageRegistry) EncodeMessage(message any) (WireMessage, er
 	if err != nil {
 		return WireMessage{}, err
 	}
-	return WireMessage{Type: definition.ID, Payload: payload}, nil
+	return WireMessage{Type: definition.ID, Payload: payload, Delivery: definition.Delivery}, nil
 }
 
 // DecodeMessage decodes a framed message using its registered definition.
@@ -405,6 +426,21 @@ func validatePlayerInput(message any) error {
 	return nil
 }
 
+func validateGenericClientInput(message any) error {
+	input, ok := message.(GenericClientInput)
+	if !ok {
+		if pointer, ok := message.(*GenericClientInput); ok {
+			input = *pointer
+		} else {
+			return fmt.Errorf("expected GenericClientInput")
+		}
+	}
+	if len(input.Payload) > MaxWireMessagePayloadSize {
+		return ErrWireMessageTooLarge
+	}
+	return nil
+}
+
 func validateCodeMessage(message any) error {
 	switch value := message.(type) {
 	case ErrorMessage:
@@ -449,6 +485,18 @@ func encodePlayerInputAny(message any) ([]byte, error) {
 
 func decodePlayerInputAny(payload []byte) (any, error) { return DecodePlayerInput(payload) }
 
+func encodeGenericClientInputAny(message any) ([]byte, error) {
+	value, ok := message.(GenericClientInput)
+	if !ok {
+		value = *(message.(*GenericClientInput))
+	}
+	return EncodeGenericClientInput(value)
+}
+
+func decodeGenericClientInputAny(payload []byte) (any, error) {
+	return DecodeGenericClientInput(payload)
+}
+
 func encodePingAny(message any) ([]byte, error) {
 	value, ok := message.(Ping)
 	if !ok {
@@ -488,6 +536,18 @@ func encodeWorldSnapshotAny(message any) ([]byte, error) {
 }
 
 func decodeWorldSnapshotAny(payload []byte) (any, error) { return DecodeWorldSnapshot(payload) }
+
+func encodeWorldDeltaSnapshotAny(message any) ([]byte, error) {
+	value, ok := message.(WorldDeltaSnapshot)
+	if !ok {
+		value = *(message.(*WorldDeltaSnapshot))
+	}
+	return EncodeWorldDeltaSnapshot(value)
+}
+
+func decodeWorldDeltaSnapshotAny(payload []byte) (any, error) {
+	return DecodeWorldDeltaSnapshot(payload)
+}
 
 func encodeEntitySpawnAny(message any) ([]byte, error) {
 	value, ok := message.(EntitySpawn)

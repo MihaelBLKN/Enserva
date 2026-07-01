@@ -22,12 +22,21 @@
 
     ```go
     type Config struct {
-    	UDPAddress    string
-    	TickRate      int
-    	SnapshotRate  int
-    	ClientTimeout time.Duration
-    	DebugEnabled  bool
-    	DebugAddress  string
+    	UDPAddress           string
+    	TickRate             int
+    	SnapshotRate         int
+    	EnableDeltaSnapshots bool
+    	FullSnapshotInterval int
+    	ClientTimeout        time.Duration
+    	MaxUDPPacketSize     int
+    	ReliableRetryInterval time.Duration
+    	ReliableMaxAttempts   int
+    	ReliableQueueLimit    int
+    	MaxInputFutureTicks   uint64
+    	MaxInputPastTicks     uint64
+    	InputBufferLimit      int
+    	DebugEnabled         bool
+    	DebugAddress         string
     }
     ```
 
@@ -39,7 +48,16 @@
         public string UdpAddress { get; set; } = ":9000";
         public int TickRate { get; set; } = 128;
         public int SnapshotRate { get; set; } = 20;
+        public bool EnableDeltaSnapshots { get; set; }
+        public int FullSnapshotInterval { get; set; } = 64;
         public TimeSpan ClientTimeout { get; set; } = TimeSpan.FromSeconds(5);
+        public int MaxUdpPacketSize { get; set; } = 1200;
+        public TimeSpan ReliableRetryInterval { get; set; } = TimeSpan.FromMilliseconds(100);
+        public int ReliableMaxAttempts { get; set; } = 5;
+        public int ReliableQueueLimit { get; set; } = 64;
+        public ulong MaxInputFutureTicks { get; set; } = 8;
+        public ulong MaxInputPastTicks { get; set; } = 2;
+        public int InputBufferLimit { get; set; } = 256;
         public bool DebugEnabled { get; set; }
         public string DebugAddress { get; set; } = ":9100";
     }
@@ -51,30 +69,49 @@
 
     ```go
     config := network.DefaultConfig()
-    config.UDPAddress = ":9100"
-    config.TickRate = 60
-    config.SnapshotRate = 10
+config.UDPAddress = ":9100"
+config.TickRate = 60
+config.SnapshotRate = 10
+config.EnableDeltaSnapshots = true
+config.FullSnapshotInterval = 32
+config.MaxUDPPacketSize = 1200
+config.ReliableRetryInterval = 100 * time.Millisecond
+config.ReliableMaxAttempts = 5
+config.ReliableQueueLimit = 64
+config.MaxInputFutureTicks = 8
+config.MaxInputPastTicks = 2
+config.InputBufferLimit = 256
     ```
 
 === "C#"
 
     ```csharp
     var config = EnservaConfig.Default();
-    config.UdpAddress = ":9100";
-    config.TickRate = 60;
-    config.SnapshotRate = 10;
+config.UdpAddress = ":9100";
+config.TickRate = 60;
+config.SnapshotRate = 10;
+config.EnableDeltaSnapshots = true;
+config.FullSnapshotInterval = 32;
+config.MaxUdpPacketSize = 1200;
+config.ReliableRetryInterval = TimeSpan.FromMilliseconds(100);
+config.ReliableMaxAttempts = 5;
+config.ReliableQueueLimit = 64;
+config.MaxInputFutureTicks = 8;
+config.MaxInputPastTicks = 2;
+config.InputBufferLimit = 256;
 
     var server = new EnservaServer(config);
     ```
 
 Methods:
 
-| Method            | Returns         | Notes                                                   |
-| ----------------- | --------------- | ------------------------------------------------------- |
-| `DefaultConfig()` | `Config`        | `:9000`, `128` ticks/s, `20` snapshots/s, `5s` timeout, debug at `:9100` when enabled. |
-| `Normalized()`    | `Config`        | Applies defaults and clamps snapshot rate to tick rate. |
-| `TickInterval()`  | `time.Duration` | Duration between calls to `Runtime.Advance`.            |
-| `SnapshotEvery()` | `uint64`        | Tick interval between UDP snapshot broadcasts.          |
+| Method                | Returns         | Notes                                                   |
+| --------------------- | --------------- | ------------------------------------------------------- |
+| `DefaultConfig()`     | `Config`        | `:9000`, `128` ticks/s, `20` snapshots/s, delta snapshots disabled, full interval `64`, `5s` timeout, `1200` byte UDP packet limit, reliable retry `100ms`, max attempts `5`, queue limit `64`, input future `8`, input past `2`, input buffer limit `256`, debug at `:9100` when enabled. |
+| `Normalized()`        | `Config`        | Applies defaults, clamps snapshot rate to tick rate, and clamps invalid UDP packet, reliable-delivery, and input-buffer limits. |
+| `TickInterval()`      | `time.Duration` | Duration between calls to `Runtime.Advance`.            |
+| `SnapshotEvery()`     | `uint64`        | Tick interval between UDP snapshot broadcasts.          |
+| `FullSnapshotEvery()` | `uint64`        | Normalized full snapshot interval for delta baseline cycles. |
 
 ## Core Object Interfaces
 
@@ -246,6 +283,33 @@ Creates a runtime with normalized configuration and empty object/factory maps.
 
 `HandleRequest` fills `ReceivedAt`, `Tick`, and `Runtime` on the context before invoking the object handler. Requests whose action is `scene.switch` are routed directly to `OnSceneSwitchRequest` instead of `OnRequest`.
 
+### Input Buffering
+
+| Method                                                                                              | Purpose                                                                  |
+| --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `BufferClientInput(input ClientInput) error`                                                        | Validates and stores an input for its target tick.                       |
+| `ConsumeClientInputs(clientID string) []ClientInput`                                                | Returns and removes inputs for the current runtime tick.                 |
+| `ConsumeClientInputsForTick(clientID string, tick uint64) []ClientInput`                            | Returns and removes inputs for an explicit tick.                         |
+| `ConsumeClientInputsForObject(clientID, objectType, objectID string) []ClientInput`                 | Returns and removes current-tick inputs targeting an object.             |
+| `ConsumeClientInputsForObjectAtTick(clientID string, tick uint64, objectType, objectID string) []ClientInput` | Returns and removes object-targeted inputs for an explicit tick. |
+| `InputBufferMetrics() InputBufferMetrics`                                                           | Returns cumulative buffered, consumed, rejected, and dropped counters.   |
+
+`ClientInput` carries `ClientID`, input `Sequence`, target `Tick`, optional object or target IDs, an opaque `Payload`, and `ReceivedAt`. `BufferClientInput` rejects inputs outside `Config.MaxInputPastTicks` and `Config.MaxInputFutureTicks`; accepted inputs are returned deterministically by tick and sequence. The buffer is infrastructure only: game code decides how to interpret payloads and apply behavior.
+
+=== "GoLang"
+
+    ```go
+    func (player *Player) OnTick(ctx network.TickContext) {
+    	for _, input := range ctx.Runtime.ConsumeClientInputsForObject(
+    		player.OwnerClientID,
+    		player.ObjectType(),
+    		player.ObjectID(),
+    	) {
+    		_ = input.Payload // Decode/apply in game code.
+    	}
+    }
+    ```
+
 === "GoLang"
 
     ```go
@@ -318,7 +382,11 @@ When `Config.DebugEnabled` is true, `ListenAndServeUDP` starts the debug HTTP li
     await udpServer.ListenAndServeAsync();
     ```
 
-`UDPServer` accepts binary wire packets as the primary client protocol and legacy JSON datagrams for compatibility, tracks clients by UDP address, rejects duplicate or older non-zero sequence numbers, advances the runtime in a goroutine, and broadcasts snapshots at the configured rate.
+`UDPServer` accepts binary wire packets as the primary client protocol and legacy JSON datagrams for compatibility, tracks clients by UDP address, rejects duplicate or older non-zero sequence numbers, suppresses duplicate reliable message IDs, preserves ordered reliable dispatch, advances the runtime in a goroutine, and broadcasts snapshots at the configured rate. Serialized outbound responses and snapshots are dropped before `WriteToUDP` when they exceed `Config.MaxUDPPacketSize`.
+
+When `Config.EnableDeltaSnapshots` is true, the UDP server stores per-client baselines and sends `WorldDeltaSnapshot` or `DeltaSnapshotMessage` after the first full snapshot until `FullSnapshotInterval` forces a new full baseline. Delta baselines reset after authentication changes, scene-switch handling, protocol mode changes, timeout removal, or reconnect.
+
+Reliable wire responses stay in a per-client retry queue until a packet carrying them is acknowledged or the configured attempt limit is reached. This queue is opt-in; snapshots and legacy JSON traffic remain unreliable by default.
 
 !!! warning
 `UDPClient` and `UDPServer` expose no public fields. Treat their internals as implementation details.
@@ -356,7 +424,7 @@ When `Config.DebugEnabled` is true, `ListenAndServeUDP` starts the debug HTTP li
 
 Used for legacy JSON authentication/object requests and as the compatibility envelope that some built-in wire messages adapt into before reaching object handlers.
 
-### `SnapshotData` and `SnapshotMessage`
+### `SnapshotData`, `SnapshotMessage`, and Deltas`
 
 === "GoLang"
 
@@ -399,6 +467,40 @@ Snapshots are grouped by object type and object ID.
 
 `SnapshotMessage` is the legacy JSON snapshot envelope. Wire clients receive the equivalent state through `WorldSnapshot`.
 
+Delta snapshots use the same object grouping for spawned and changed objects:
+
+=== "GoLang"
+
+    ```go
+    type SnapshotObjectRef struct {
+    	ObjectType string `json:"objectType"`
+    	ObjectID   string `json:"objectId"`
+    }
+
+    type SnapshotDelta struct {
+    	Spawned   SnapshotData        `json:"spawned,omitempty"`
+    	Changed   SnapshotData        `json:"changed,omitempty"`
+    	Despawned []SnapshotObjectRef `json:"despawned,omitempty"`
+    }
+
+    type DeltaSnapshotMessage struct {
+    	Type         string              `json:"type"`
+    	ClientID     string              `json:"clientId,omitempty"`
+    	Tick         uint64              `json:"tick"`
+    	LastSequence uint64              `json:"lastSeq,omitempty"`
+    	BaselineTick uint64              `json:"baselineTick,omitempty"`
+    	Spawned      SnapshotData        `json:"spawned,omitempty"`
+    	Changed      SnapshotData        `json:"changed,omitempty"`
+    	Despawned    []SnapshotObjectRef `json:"despawned,omitempty"`
+    }
+    ```
+
+| Function or method                    | Purpose                                                                    |
+| ------------------------------------- | -------------------------------------------------------------------------- |
+| `BuildSnapshotDelta(previous, current)` | Compares visible snapshots and returns spawned, changed, and despawned data. |
+| `CloneSnapshotData(snapshot)`         | Returns a detached JSON-shaped copy for storing baselines.                 |
+| `SnapshotDelta.Empty()`               | Reports whether a delta contains no changes.                               |
+
 ### `ResponseMessage`
 
 === "GoLang"
@@ -427,6 +529,8 @@ Snapshots are grouped by object type and object ID.
     ```
 
 Used by the UDP transport for legacy JSON error responses and available to object handlers through `RequestContext.Respond`. Wire responses are encoded through registered server messages such as `ErrorMessage`.
+
+If a UDP response serializes beyond `Config.MaxUDPPacketSize`, the transport drops it and returns `ErrUDPPacketTooLarge` from the response writer.
 
 ### `AuthenticationResponse`
 
@@ -487,9 +591,12 @@ The UDP transport accepts binary packets that start with `WireProtocolMagic` and
 | `WireMessagePong`               | `Pong`                 | Server to client.          |
 | `WireMessageError`              | `ErrorMessage`         | Server to client.          |
 | `WireMessageDisconnect`         | `DisconnectMessage`    | Server to client.          |
+| `WireMessageReliable`           | Reliable envelope      | Protocol wrapper.          |
 | `WireMessageObjectRequest`      | `ObjectRequest`        | Client to server.          |
 | `WireMessagePlayerInput`        | `PlayerInput`          | Client to server.          |
 | `WireMessageWorldSnapshot`      | `WorldSnapshot`        | Server to client.          |
+| `WireMessageDeltaSnapshot`      | `WorldDeltaSnapshot`   | Server to client.          |
+| `WireMessageClientInput`        | `GenericClientInput`   | Client to server.          |
 | `WireMessageEntitySpawn`        | `EntitySpawn`          | Server to client.          |
 | `WireMessageEntityDespawn`      | `EntityDespawn`        | Server to client.          |
 | `WireMessageEntityUpdate`       | `EntityUpdate`         | Server to client.          |
@@ -517,6 +624,7 @@ The UDP transport accepts binary packets that start with `WireProtocolMagic` and
     	ID          WireMessageType
     	Name        string
     	Direction   WireMessageDirection
+    	Delivery    DeliveryClass
     	MessageType reflect.Type
     	Encode      WireMessageEncoder
     	Decode      WireMessageDecoder
@@ -533,6 +641,7 @@ The UDP transport accepts binary packets that start with `WireProtocolMagic` and
         public ushort Id { get; init; }
         public string Name { get; init; } = "";
         public WireMessageDirection Direction { get; init; }
+        public DeliveryClass Delivery { get; init; }
         public Type MessageType { get; init; } = typeof(object);
         public Func<object, byte[]> Encode { get; init; } = _ => Array.Empty<byte>();
         public Func<byte[], object> Decode { get; init; } = _ => new object();
@@ -553,6 +662,19 @@ The UDP transport accepts binary packets that start with `WireProtocolMagic` and
 | `Dispatch(ctx WireMessageContext) (bool, error)`        | Calls a registered handler when one exists.                    |
 
 `WireMessageContext` gives handlers access to transport, client, sequence, ack, message, runtime, and response writer fields.
+
+### Delivery Helpers
+
+| Type or function | Purpose |
+| --- | --- |
+| `DeliveryClass` | Delivery metadata for wire messages. Values are `DeliveryUnreliable`, `DeliveryReliableOrdered`, and `DeliveryReliableUnordered`. |
+| `WireDelivery` | Wrapper accepted by UDP response writers to override the delivery class for one message. |
+| `Deliver(message, class)` | Wraps a response with an explicit delivery class. |
+| `DeliverReliableOrdered(message)` | Sends a response as reliable ordered when the peer uses wire packets. |
+| `DeliverReliableUnordered(message)` | Sends a response as reliable unordered when the peer uses wire packets. |
+| `DeliverUnreliable(message)` | Explicitly keeps a response unreliable. |
+
+Reliable delivery is only applied to binary wire messages. Snapshot messages are encoded with the default unreliable class unless an application explicitly changes its own message metadata.
 
 ## Features
 
@@ -780,6 +902,10 @@ These exported errors are intended for comparison with `errors.Is`:
 | `ErrAuthenticatedClientIDInUse`       | A UDP client authenticates as an ID already used by another authenticated client. |
 | `ErrMissingAuthenticationID`          | Authentication returns an empty ID.                                               |
 | `ErrResponsesUnsupported`             | A response is attempted without a response writer.                                |
+| `ErrUDPPacketTooLarge`                | A serialized outbound UDP response or snapshot exceeds `Config.MaxUDPPacketSize`. |
+| `ErrInvalidDeliveryClass`             | A reliable envelope or message definition uses an unknown delivery class.         |
+| `ErrReliableMessageID`                | A reliable wire message is missing its non-zero reliable ID.                      |
+| `ErrReliableQueueFull`                | A UDP client already has `Config.ReliableQueueLimit` pending reliable messages.   |
 | `ErrMissingSceneRuntime`              | A scene switch was requested without a runtime.                                   |
 | `ErrMissingSceneID`                   | A scene switch request has an empty target scene.                                 |
 | `ErrSceneSwitchUnsupported`           | The target object does not implement `SceneSwitchHandler`.                        |

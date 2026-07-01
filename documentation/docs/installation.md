@@ -48,6 +48,10 @@ Useful flags:
 | `-tickRate`       | `128`   | Simulation ticks per second.                                     |
 | `-snapshotRate`   | `20`    | Snapshot broadcasts per second.                                  |
 | `-clientTimeout`  | `5s`    | UDP client inactivity timeout.                                   |
+| `-maxUdpPacketSize` | `1200` | Maximum outbound UDP payload size in bytes.                      |
+| `-reliableRetryInterval` | `100ms` | Retry interval for unacknowledged reliable wire messages. |
+| `-reliableMaxAttempts` | `5` | Maximum send attempts for one reliable wire message. |
+| `-reliableQueueLimit` | `64` | Maximum pending reliable messages per UDP client. |
 | `-exampleObjects` | `true`  | Register the sample player, building, and authenticator objects. |
 | `-debug`          | `false` | Serve the browser debug interface.                               |
 | `-debugAddr`      | `:9100` | Debug interface HTTP address.                                    |

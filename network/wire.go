@@ -53,9 +53,14 @@ var (
 //   uint32 payload_length     bytes following the packet header
 //
 // Message header, repeated message_count times:
-//   uint16 message_type       stable registry ID
+//   uint16 message_type       stable registry ID, or 0x0007 for a reliable envelope
 //   uint32 payload_length
 //   bytes  payload
+//
+// Reliable envelopes preserve the same message header but carry delivery class,
+// reliable message ID, inner message type, and inner payload inside the payload.
+// Messages without delivery metadata remain unreliable and use the original
+// framing bytes.
 //
 // Unknown message types are preserved as UnknownWireMessage so callers can skip them
 // without dropping the whole packet. Malformed, oversized, or wrong-version packets fail.
@@ -73,6 +78,7 @@ const (
 	WireMessagePong        WireMessageType = 0x0004
 	WireMessageError       WireMessageType = 0x0005
 	WireMessageDisconnect  WireMessageType = 0x0006
+	WireMessageReliable    WireMessageType = 0x0007
 
 	// Built-in engine messages. Games may ignore these and register their own
 	// messages in the game range instead.
@@ -82,12 +88,16 @@ const (
 	WireMessageEntitySpawn   WireMessageType = 0x0103
 	WireMessageEntityDespawn WireMessageType = 0x0104
 	WireMessageEntityUpdate  WireMessageType = 0x0105
+	WireMessageDeltaSnapshot WireMessageType = 0x0106
+	WireMessageClientInput   WireMessageType = 0x0107
 )
 
 // WireMessage is a framed message with an already encoded payload.
 type WireMessage struct {
-	Type    WireMessageType
-	Payload []byte
+	Type       WireMessageType
+	Payload    []byte
+	Delivery   DeliveryClass
+	DeliveryID uint64
 }
 
 // WirePacket is a decoded binary packet.
@@ -122,6 +132,8 @@ type ObjectRequest struct {
 
 // PlayerInput is the hot-path built-in player movement input.
 type PlayerInput struct {
+	Sequence uint64
+	Tick     uint64
 	ObjectID string
 	X        float32
 	Y        float32
@@ -155,6 +167,17 @@ type WorldSnapshot struct {
 	Tick         uint64
 	LastSequence uint64
 	Objects      SnapshotData
+}
+
+// WorldDeltaSnapshot publishes changes since a prior full or delta snapshot baseline.
+type WorldDeltaSnapshot struct {
+	ClientID     string
+	Tick         uint64
+	LastSequence uint64
+	BaselineTick uint64
+	Spawned      SnapshotData
+	Changed      SnapshotData
+	Despawned    []SnapshotObjectRef
 }
 
 // EntitySpawn is reserved for future delta replication.
@@ -203,12 +226,24 @@ func EncodePacketWithAcks(sequence, ack, ackBits uint64, messages []WireMessage)
 
 	payload := bytes.Buffer{}
 	for _, message := range messages {
-		if len(message.Payload) > MaxWireMessagePayloadSize {
-			return nil, fmt.Errorf("%w: %d", ErrWireMessageTooLarge, len(message.Payload))
+		wireType := message.Type
+		wirePayload := message.Payload
+		if message.Delivery.reliable() {
+			encoded, err := encodeReliableEnvelope(message)
+			if err != nil {
+				return nil, err
+			}
+			wireType = WireMessageReliable
+			wirePayload = encoded
+		} else if err := validateDeliveryClass(message.Delivery); err != nil {
+			return nil, err
 		}
-		writeUint16(&payload, uint16(message.Type))
-		writeUint32(&payload, uint32(len(message.Payload)))
-		payload.Write(message.Payload)
+		if len(wirePayload) > MaxWireMessagePayloadSize {
+			return nil, fmt.Errorf("%w: %d", ErrWireMessageTooLarge, len(wirePayload))
+		}
+		writeUint16(&payload, uint16(wireType))
+		writeUint32(&payload, uint32(len(wirePayload)))
+		payload.Write(wirePayload)
 	}
 	if payload.Len() > MaxWirePayloadSize {
 		return nil, fmt.Errorf("%w: %d", ErrWirePacketTooLarge, payload.Len())
@@ -284,10 +319,18 @@ func DecodePacket(data []byte) (WirePacket, error) {
 		if _, err := reader.Read(payload); err != nil {
 			return WirePacket{}, err
 		}
-		messages = append(messages, WireMessage{
+		message := WireMessage{
 			Type:    WireMessageType(messageType),
 			Payload: payload,
-		})
+		}
+		if message.Type == WireMessageReliable {
+			decoded, err := decodeReliableEnvelope(payload)
+			if err != nil {
+				return WirePacket{}, err
+			}
+			message = decoded
+		}
+		messages = append(messages, message)
 	}
 	if reader.Len() != 0 {
 		return WirePacket{}, fmt.Errorf("%w: trailing bytes", ErrInvalidWirePacket)
@@ -401,6 +444,8 @@ func EncodePlayerInput(message PlayerInput) ([]byte, error) {
 	if err := writeString(&writer, message.ObjectID, MaxWireStringBytes); err != nil {
 		return nil, err
 	}
+	writeUint64(&writer, message.Sequence)
+	writeUint64(&writer, message.Tick)
 	writeFloat32(&writer, message.X)
 	writeFloat32(&writer, message.Y)
 	writeFloat32(&writer, message.Z)
@@ -410,6 +455,29 @@ func EncodePlayerInput(message PlayerInput) ([]byte, error) {
 func DecodePlayerInput(payload []byte) (PlayerInput, error) {
 	reader := bytes.NewReader(payload)
 	objectID, err := readString(reader, MaxWireStringBytes)
+	if err != nil {
+		return PlayerInput{}, err
+	}
+	if reader.Len() == 12 {
+		x, err := readFloat32(reader)
+		if err != nil {
+			return PlayerInput{}, err
+		}
+		y, err := readFloat32(reader)
+		if err != nil {
+			return PlayerInput{}, err
+		}
+		z, err := readFloat32(reader)
+		if err != nil {
+			return PlayerInput{}, err
+		}
+		return PlayerInput{ObjectID: objectID, X: x, Y: y, Z: z}, nil
+	}
+	sequence, err := readUint64(reader)
+	if err != nil {
+		return PlayerInput{}, err
+	}
+	tick, err := readUint64(reader)
 	if err != nil {
 		return PlayerInput{}, err
 	}
@@ -428,7 +496,66 @@ func DecodePlayerInput(payload []byte) (PlayerInput, error) {
 	if reader.Len() != 0 {
 		return PlayerInput{}, fmt.Errorf("%w: trailing player input bytes", ErrMalformedWirePayload)
 	}
-	return PlayerInput{ObjectID: objectID, X: x, Y: y, Z: z}, nil
+	return PlayerInput{Sequence: sequence, Tick: tick, ObjectID: objectID, X: x, Y: y, Z: z}, nil
+}
+
+func EncodeGenericClientInput(message GenericClientInput) ([]byte, error) {
+	if len(message.Payload) > MaxWireMessagePayloadSize {
+		return nil, fmt.Errorf("%w: client input payload %d", ErrWireMessageTooLarge, len(message.Payload))
+	}
+	writer := bytes.Buffer{}
+	writeUint64(&writer, message.Sequence)
+	writeUint64(&writer, message.Tick)
+	if err := writeString(&writer, message.ObjectType, MaxWireStringBytes); err != nil {
+		return nil, err
+	}
+	if err := writeString(&writer, message.ObjectID, MaxWireStringBytes); err != nil {
+		return nil, err
+	}
+	if err := writeString(&writer, message.TargetID, MaxWireStringBytes); err != nil {
+		return nil, err
+	}
+	writeBytes(&writer, message.Payload)
+	return writer.Bytes(), nil
+}
+
+func DecodeGenericClientInput(payload []byte) (GenericClientInput, error) {
+	reader := bytes.NewReader(payload)
+	sequence, err := readUint64(reader)
+	if err != nil {
+		return GenericClientInput{}, err
+	}
+	tick, err := readUint64(reader)
+	if err != nil {
+		return GenericClientInput{}, err
+	}
+	objectType, err := readString(reader, MaxWireStringBytes)
+	if err != nil {
+		return GenericClientInput{}, err
+	}
+	objectID, err := readString(reader, MaxWireStringBytes)
+	if err != nil {
+		return GenericClientInput{}, err
+	}
+	targetID, err := readString(reader, MaxWireStringBytes)
+	if err != nil {
+		return GenericClientInput{}, err
+	}
+	data, err := readBytes(reader, MaxWireMessagePayloadSize)
+	if err != nil {
+		return GenericClientInput{}, err
+	}
+	if reader.Len() != 0 {
+		return GenericClientInput{}, fmt.Errorf("%w: trailing client input bytes", ErrMalformedWirePayload)
+	}
+	return GenericClientInput{
+		Sequence:   sequence,
+		Tick:       tick,
+		ObjectType: objectType,
+		ObjectID:   objectID,
+		TargetID:   targetID,
+		Payload:    data,
+	}, nil
 }
 
 func EncodePing(message Ping) ([]byte, error) {
@@ -556,6 +683,73 @@ func DecodeWorldSnapshot(payload []byte) (WorldSnapshot, error) {
 		Tick:         tick,
 		LastSequence: lastSequence,
 		Objects:      objects,
+	}, nil
+}
+
+func EncodeWorldDeltaSnapshot(message WorldDeltaSnapshot) ([]byte, error) {
+	writer := bytes.Buffer{}
+	if err := writeString(&writer, message.ClientID, MaxWireStringBytes); err != nil {
+		return nil, err
+	}
+	writeUint64(&writer, message.Tick)
+	writeUint64(&writer, message.LastSequence)
+	writeUint64(&writer, message.BaselineTick)
+	if err := encodeSnapshotData(&writer, message.Spawned); err != nil {
+		return nil, err
+	}
+	if err := encodeSnapshotData(&writer, message.Changed); err != nil {
+		return nil, err
+	}
+	if err := encodeSnapshotObjectRefs(&writer, message.Despawned); err != nil {
+		return nil, err
+	}
+	if writer.Len() > MaxWireMessagePayloadSize {
+		return nil, fmt.Errorf("%w: delta snapshot %d", ErrWireMessageTooLarge, writer.Len())
+	}
+	return writer.Bytes(), nil
+}
+
+func DecodeWorldDeltaSnapshot(payload []byte) (WorldDeltaSnapshot, error) {
+	reader := bytes.NewReader(payload)
+	clientID, err := readString(reader, MaxWireStringBytes)
+	if err != nil {
+		return WorldDeltaSnapshot{}, err
+	}
+	tick, err := readUint64(reader)
+	if err != nil {
+		return WorldDeltaSnapshot{}, err
+	}
+	lastSequence, err := readUint64(reader)
+	if err != nil {
+		return WorldDeltaSnapshot{}, err
+	}
+	baselineTick, err := readUint64(reader)
+	if err != nil {
+		return WorldDeltaSnapshot{}, err
+	}
+	spawned, err := decodeSnapshotData(reader)
+	if err != nil {
+		return WorldDeltaSnapshot{}, err
+	}
+	changed, err := decodeSnapshotData(reader)
+	if err != nil {
+		return WorldDeltaSnapshot{}, err
+	}
+	despawned, err := decodeSnapshotObjectRefs(reader)
+	if err != nil {
+		return WorldDeltaSnapshot{}, err
+	}
+	if reader.Len() != 0 {
+		return WorldDeltaSnapshot{}, fmt.Errorf("%w: trailing delta snapshot bytes", ErrMalformedWirePayload)
+	}
+	return WorldDeltaSnapshot{
+		ClientID:     clientID,
+		Tick:         tick,
+		LastSequence: lastSequence,
+		BaselineTick: baselineTick,
+		Spawned:      spawned,
+		Changed:      changed,
+		Despawned:    despawned,
 	}, nil
 }
 
@@ -760,6 +954,53 @@ func decodeSnapshotData(reader *bytes.Reader) (SnapshotData, error) {
 		}
 	}
 	return snapshot, nil
+}
+
+func encodeSnapshotObjectRefs(writer *bytes.Buffer, refs []SnapshotObjectRef) error {
+	if len(refs) > 65535 {
+		return fmt.Errorf("%w: too many despawned objects", ErrWireMessageTooLarge)
+	}
+	ordered := append([]SnapshotObjectRef(nil), refs...)
+	sort.Slice(ordered, func(left, right int) bool {
+		if ordered[left].ObjectType == ordered[right].ObjectType {
+			return ordered[left].ObjectID < ordered[right].ObjectID
+		}
+		return ordered[left].ObjectType < ordered[right].ObjectType
+	})
+
+	writeUint16(writer, uint16(len(ordered)))
+	for _, ref := range ordered {
+		if err := writeString(writer, ref.ObjectType, MaxWireStringBytes); err != nil {
+			return err
+		}
+		if err := writeString(writer, ref.ObjectID, MaxWireStringBytes); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func decodeSnapshotObjectRefs(reader *bytes.Reader) ([]SnapshotObjectRef, error) {
+	count, err := readUint16(reader)
+	if err != nil {
+		return nil, err
+	}
+	refs := make([]SnapshotObjectRef, 0, count)
+	for index := 0; index < int(count); index++ {
+		objectType, err := readString(reader, MaxWireStringBytes)
+		if err != nil {
+			return nil, err
+		}
+		objectID, err := readString(reader, MaxWireStringBytes)
+		if err != nil {
+			return nil, err
+		}
+		refs = append(refs, SnapshotObjectRef{
+			ObjectType: objectType,
+			ObjectID:   objectID,
+		})
+	}
+	return refs, nil
 }
 
 func encodeWireValue(writer *bytes.Buffer, value any, depth int) error {

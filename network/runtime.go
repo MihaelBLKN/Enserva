@@ -31,6 +31,8 @@ var (
 	ErrMissingAuthenticationID = errors.New("missing authentication id")
 	// ErrResponsesUnsupported indicates that the current transport cannot send immediate responses.
 	ErrResponsesUnsupported = errors.New("request responses are unsupported")
+	// ErrUDPPacketTooLarge indicates that an outbound UDP payload exceeds the configured packet size limit.
+	ErrUDPPacketTooLarge = errors.New("udp packet too large")
 	// ErrMissingSceneRuntime indicates that a scene switch was requested without a runtime.
 	ErrMissingSceneRuntime = errors.New("missing scene runtime")
 	// ErrMissingSceneID indicates that a scene switch target was empty.
@@ -46,6 +48,7 @@ type Runtime struct {
 	objects                  map[string]map[string]Object
 	factories                map[string]ObjectFactory
 	wireMessages             *WireMessageRegistry
+	inputs                   inputBuffer
 	authenticationHandler    AuthenticationHandler
 	features                 Features
 	authenticationObjectType string
@@ -61,6 +64,7 @@ func NewRuntime(config Config) *Runtime {
 		objects:      map[string]map[string]Object{},
 		factories:    map[string]ObjectFactory{},
 		wireMessages: NewDefaultWireMessageRegistry(),
+		inputs:       newInputBuffer(),
 	}
 }
 
@@ -90,6 +94,42 @@ func (runtime *Runtime) Tick() uint64 {
 	defer runtime.mu.RUnlock()
 
 	return runtime.tick
+}
+
+// BufferClientInput validates and stores a client input for its target tick.
+func (runtime *Runtime) BufferClientInput(input ClientInput) error {
+	runtime.mu.RLock()
+	currentTick := runtime.tick
+	runtime.mu.RUnlock()
+
+	return runtime.inputs.add(input, currentTick, runtime.config)
+}
+
+// ConsumeClientInputs returns and removes inputs for clientID at the current runtime tick.
+func (runtime *Runtime) ConsumeClientInputs(clientID string) []ClientInput {
+	return runtime.ConsumeClientInputsForTick(clientID, runtime.Tick())
+}
+
+// ConsumeClientInputsForTick returns and removes inputs for clientID at tick.
+func (runtime *Runtime) ConsumeClientInputsForTick(clientID string, tick uint64) []ClientInput {
+	return runtime.inputs.consume(clientID, tick)
+}
+
+// ConsumeClientInputsForObject returns and removes inputs for clientID at the
+// current runtime tick that target the supplied object identity.
+func (runtime *Runtime) ConsumeClientInputsForObject(clientID, objectType, objectID string) []ClientInput {
+	return runtime.ConsumeClientInputsForObjectAtTick(clientID, runtime.Tick(), objectType, objectID)
+}
+
+// ConsumeClientInputsForObjectAtTick returns and removes inputs for clientID at
+// tick that target the supplied object identity.
+func (runtime *Runtime) ConsumeClientInputsForObjectAtTick(clientID string, tick uint64, objectType, objectID string) []ClientInput {
+	return runtime.inputs.consumeForObject(clientID, tick, objectType, objectID)
+}
+
+// InputBufferMetrics returns cumulative input-buffer counters.
+func (runtime *Runtime) InputBufferMetrics() InputBufferMetrics {
+	return runtime.inputs.metricsSnapshot()
 }
 
 // RegisterObject adds object to the runtime and runs its initialization hook.
