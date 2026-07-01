@@ -325,9 +325,11 @@ This sends one binary `engine.player_input` message (`0x0101`) inside one wire p
 
     var messagePayload = new List<byte>();
     WriteString(messagePayload, "player-1"); // objectId
-    WriteF32(messagePayload, 1.0f);          // x
-    WriteF32(messagePayload, 0.0f);          // y
-    WriteF32(messagePayload, 0.0f);          // z
+    WriteU64(messagePayload, 1);              // input sequence
+    WriteU64(messagePayload, 120);            // target tick
+    WriteF32(messagePayload, 1.0f);           // x
+    WriteF32(messagePayload, 0.0f);           // y
+    WriteF32(messagePayload, 0.0f);           // z
 
     var messages = new List<byte>();
     WriteU16(messages, 0x0101);                         // engine.player_input

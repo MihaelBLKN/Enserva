@@ -47,8 +47,11 @@ When the sample objects are enabled, Enserva registers a `PlayerAuthenticator`. 
     	defer conn.Close()
 
     	hello, err := network.EncodeClientMessage(network.ClientHello{
-    		ClientName: "quickstart",
-    		Token:      "",
+    		ClientName:      "quickstart",
+    		Token:           "",
+    		ProtocolVersion: network.WireProtocolVersion,
+    		Capabilities:    network.DefaultWireCapabilities(),
+    		MaxPacketSize:   1200,
     	})
     	if err != nil {
     		log.Fatal(err)
@@ -121,6 +124,9 @@ When the sample objects are enabled, Enserva registers a `PlayerAuthenticator`. 
     var helloPayload = new List<byte>();
     WriteString(helloPayload, "quickstart");
     WriteString(helloPayload, "");
+    helloPayload.Add(1);                       // protocol version
+    WriteU64(helloPayload, 7);                  // capabilities: delta + reliable ordered/unordered
+    WriteU32(helloPayload, 1200);               // max packet size
 
     var messages = new List<byte>();
     WriteU16(messages, 0x0001);                 // protocol.hello
@@ -155,6 +161,8 @@ After authentication, send the built-in `PlayerInput` wire message from the same
 
     ```go
     input, err := network.EncodeClientMessage(network.PlayerInput{
+    	Sequence: 2,
+    	Tick:     0,
     	ObjectID: "player-1",
     	X:        1,
     	Y:        0,
@@ -217,6 +225,8 @@ After authentication, send the built-in `PlayerInput` wire message from the same
 
     var inputPayload = new List<byte>();
     WriteString(inputPayload, "player-1");
+    WriteU64(inputPayload, 2);
+    WriteU64(inputPayload, 0);
     WriteF32(inputPayload, 1.0f);
     WriteF32(inputPayload, 0.0f);
     WriteF32(inputPayload, 0.0f);

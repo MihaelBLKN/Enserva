@@ -26,6 +26,7 @@
     	TickRate             int
     	SnapshotRate         int
     	EnableDeltaSnapshots bool
+    	SupportedWireCapabilities uint64
     	FullSnapshotInterval int
     	ClientTimeout        time.Duration
     	MaxClients           int
@@ -53,6 +54,7 @@
         public int TickRate { get; set; } = 128;
         public int SnapshotRate { get; set; } = 20;
         public bool EnableDeltaSnapshots { get; set; }
+        public ulong SupportedWireCapabilities { get; set; }
         public int FullSnapshotInterval { get; set; } = 64;
         public TimeSpan ClientTimeout { get; set; } = TimeSpan.FromSeconds(5);
         public int MaxClients { get; set; }
@@ -77,44 +79,46 @@
 
     ```go
     config := network.DefaultConfig()
-config.UDPAddress = ":9100"
-config.TickRate = 60
-config.SnapshotRate = 10
-config.EnableDeltaSnapshots = true
-config.FullSnapshotInterval = 32
-config.MaxClients = 64
-config.MaxUDPPacketSize = 1200
-config.EnableBandwidthBudget = true
-config.ClientBytesPerSecond = 24000
-config.DefaultSnapshotPriority = network.OutboundPriorityNormal
-config.ReliableRetryInterval = 100 * time.Millisecond
-config.ReliableMaxAttempts = 5
-config.ReliableQueueLimit = 64
-config.MaxInputFutureTicks = 8
-config.MaxInputPastTicks = 2
-config.InputBufferLimit = 256
+    config.UDPAddress = ":9100"
+    config.TickRate = 60
+    config.SnapshotRate = 10
+    config.EnableDeltaSnapshots = true
+    config.SupportedWireCapabilities = uint64(network.DefaultWireCapabilities())
+    config.FullSnapshotInterval = 32
+    config.MaxClients = 64
+    config.MaxUDPPacketSize = 1200
+    config.EnableBandwidthBudget = true
+    config.ClientBytesPerSecond = 24000
+    config.DefaultSnapshotPriority = network.OutboundPriorityNormal
+    config.ReliableRetryInterval = 100 * time.Millisecond
+    config.ReliableMaxAttempts = 5
+    config.ReliableQueueLimit = 64
+    config.MaxInputFutureTicks = 8
+    config.MaxInputPastTicks = 2
+    config.InputBufferLimit = 256
     ```
 
 === "C#"
 
     ```csharp
     var config = EnservaConfig.Default();
-config.UdpAddress = ":9100";
-config.TickRate = 60;
-config.SnapshotRate = 10;
-config.EnableDeltaSnapshots = true;
-config.FullSnapshotInterval = 32;
-config.MaxClients = 64;
-config.MaxUdpPacketSize = 1200;
-config.EnableBandwidthBudget = true;
-config.ClientBytesPerSecond = 24000;
-config.DefaultSnapshotPriority = 0;
-config.ReliableRetryInterval = TimeSpan.FromMilliseconds(100);
-config.ReliableMaxAttempts = 5;
-config.ReliableQueueLimit = 64;
-config.MaxInputFutureTicks = 8;
-config.MaxInputPastTicks = 2;
-config.InputBufferLimit = 256;
+    config.UdpAddress = ":9100";
+    config.TickRate = 60;
+    config.SnapshotRate = 10;
+    config.EnableDeltaSnapshots = true;
+    config.SupportedWireCapabilities = EnservaWire.DefaultCapabilities;
+    config.FullSnapshotInterval = 32;
+    config.MaxClients = 64;
+    config.MaxUdpPacketSize = 1200;
+    config.EnableBandwidthBudget = true;
+    config.ClientBytesPerSecond = 24000;
+    config.DefaultSnapshotPriority = 0;
+    config.ReliableRetryInterval = TimeSpan.FromMilliseconds(100);
+    config.ReliableMaxAttempts = 5;
+    config.ReliableQueueLimit = 64;
+    config.MaxInputFutureTicks = 8;
+    config.MaxInputPastTicks = 2;
+    config.InputBufferLimit = 256;
 
     var server = new EnservaServer(config);
     ```
@@ -123,8 +127,8 @@ Methods:
 
 | Method                | Returns         | Notes                                                   |
 | --------------------- | --------------- | ------------------------------------------------------- |
-| `DefaultConfig()`     | `Config`        | `:9000`, `128` ticks/s, `20` snapshots/s, delta snapshots disabled, full interval `64`, `5s` timeout, unlimited clients, `1200` byte UDP packet limit, bandwidth budgeting disabled, default snapshot priority `OutboundPriorityNormal`, reliable retry `100ms`, max attempts `5`, queue limit `64`, input future `8`, input past `2`, input buffer limit `256`, debug at `:9100` when enabled. |
-| `Normalized()`        | `Config`        | Applies defaults, clamps snapshot rate to tick rate, and clamps invalid UDP packet, reliable-delivery, and input-buffer limits. |
+| `DefaultConfig()`     | `Config`        | `:9000`, `128` ticks/s, `20` snapshots/s, delta snapshots disabled, supported wire capabilities resolved during normalization, full interval `64`, `5s` timeout, unlimited clients, `1200` byte UDP packet limit, bandwidth budgeting disabled, default snapshot priority `OutboundPriorityNormal`, reliable retry `100ms`, max attempts `5`, queue limit `64`, input future `8`, input past `2`, input buffer limit `256`, debug at `:9100` when enabled. |
+| `Normalized()`        | `Config`        | Applies defaults, clamps snapshot rate to tick rate, resolves supported wire capabilities, masks out delta snapshots when disabled, and clamps invalid UDP packet, reliable-delivery, and input-buffer limits. |
 | `TickInterval()`      | `time.Duration` | Duration between calls to `Runtime.Advance`.            |
 | `SnapshotEvery()`     | `uint64`        | Tick interval between UDP snapshot broadcasts.          |
 | `FullSnapshotEvery()` | `uint64`        | Normalized full snapshot interval for delta baseline cycles. |

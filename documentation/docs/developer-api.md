@@ -78,6 +78,7 @@ These are the methods a network object can use. The first three are required bec
 | `OnSceneSwitchRequest(network.SceneSwitchContext) (network.SceneSwitchDecision, error)` | No | `SceneSwitchHandler` | A standard scene switch request targets the object. |
 | `OnAuthenticationAttempt(network.AuthenticationContext) (string, error)` | No       | `AuthenticationHandler` | A wire `ClientHello` or legacy JSON auth message is received.    |
 | `SnapshotVisible() bool`                                                 | No       | `SnapshotVisibility`    | Snapshot generation. Return `false` to hide server-only objects. |
+| `SnapshotPriority() network.OutboundPriority`                            | No       | `SnapshotPriorityProvider` | Snapshot budgeting. Lower-priority objects are omitted first when a snapshot must fit budget or packet-size limits. |
 
 Factories are separate from objects:
 

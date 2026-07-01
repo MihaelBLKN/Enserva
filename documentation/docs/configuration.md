@@ -17,6 +17,7 @@ Enserva does not define environment-variable or file-based configuration.
 | `TickRate`             | `int`           | `128`             | Number of simulation ticks per second.                                   |
 | `SnapshotRate`         | `int`           | `20`              | Number of snapshot broadcasts per second.                                |
 | `EnableDeltaSnapshots` | `bool`          | `false`           | Enables per-client delta snapshots after each client's first full state. |
+| `SupportedWireCapabilities` | `uint64`    | `DefaultWireCapabilities()` with delta masked off unless enabled | Optional server-side capability mask used during wire hello/welcome negotiation. |
 | `FullSnapshotInterval` | `int`           | `64`              | Maximum emitted snapshots in a delta baseline cycle, including the full. |
 | `ClientTimeout`        | `time.Duration` | `5 * time.Second` | Duration after which inactive UDP clients are removed.                   |
 | `MaxClients`           | `int`           | `0`               | Maximum simultaneous UDP clients. `0` allows unlimited clients.          |
@@ -83,6 +84,8 @@ Use `network.DefaultConfig()` for defaults:
 | `SnapshotRate <= 0`          | Uses `20`.                                  |
 | `SnapshotRate > TickRate`    | Clamps snapshot rate to the tick rate.      |
 | `FullSnapshotInterval <= 0`  | Uses `64`.                                  |
+| `SupportedWireCapabilities == 0` | Uses `DefaultWireCapabilities()`.       |
+| `EnableDeltaSnapshots == false` | Removes `WireCapabilityDeltaSnapshots` from supported capabilities. |
 | `ClientTimeout <= 0`         | Uses `5s`.                                  |
 | `MaxClients <= 0`            | Allows unlimited UDP clients.              |
 | `MaxUDPPacketSize <= 0`      | Uses `1200`.                                |
@@ -217,6 +220,12 @@ Deltas are calculated after scene filtering, snapshot visibility, and interest m
 The server also forces a full snapshot when no baseline exists, after authentication changes a client ID, after a client switches from JSON to wire packets, after a scene-switch request, or when an inactive UDP client is removed and later reconnects.
 
 Legacy JSON clients receive `DeltaSnapshotMessage` envelopes with `type: "snapshot.delta"`. Wire clients receive `WorldDeltaSnapshot` (`engine.delta_snapshot`). Debug counters expose total snapshots plus `fullSnapshotsSent` and `deltaSnapshotsSent`.
+
+## Wire Capability Negotiation
+
+`SupportedWireCapabilities` controls the optional protocol features the server is willing to negotiate with a wire client. When it is left as `0`, normalization uses `network.DefaultWireCapabilities()`, currently delta snapshots, reliable ordered delivery, and reliable unordered delivery. If `EnableDeltaSnapshots` is false, normalization clears the delta-snapshot bit even when the default or custom mask includes it.
+
+During a `ClientHello`, the server intersects the client's requested capabilities with the normalized server mask and returns the result in `Welcome`. The negotiated maximum packet size is the lower of the client's `MaxPacketSize`, when supplied, and `Config.MaxUDPPacketSize`.
 
 ## UDP Wire Packets
 

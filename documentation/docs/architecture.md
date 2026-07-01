@@ -37,6 +37,8 @@ flowchart TD
     Runtime --> Registry["Object registry"]
     Runtime --> Factories["Factory registry"]
     Runtime --> WireRegistry["Wire message registry"]
+    Runtime --> Inputs["Client input buffer"]
+    Runtime --> Features["Interest and scene features"]
     Runtime --> Auth["Authentication handler"]
     Runtime --> Hooks["Tick/request hooks"]
     UDP --> WireRegistry
@@ -54,12 +56,13 @@ flowchart TD
 5. A goroutine advances runtime ticks at `Config.TickInterval()`.
 6. New UDP client addresses are accepted while under `Config.MaxClients`, or without a cap when `MaxClients` is `0`.
 7. UDP datagrams are decoded as binary wire packets first when they carry the `ES` magic value; legacy JSON requests remain a compatibility path.
-8. Authentication messages go to the authentication object.
-9. Regular object requests route to existing objects by `objectType` and `objectId`.
-10. Reliable wire messages are deduplicated, ordered when requested, and tracked for retries when sent.
-11. Tick-aligned client inputs are validated against the configured past/future windows and buffered by client ID and target tick.
-12. Immediate responses and snapshots are serialized as wire or JSON payloads, checked against `Config.MaxUDPPacketSize`, and optionally charged against each client's outbound byte budget before `WriteToUDP`.
-13. Snapshots are broadcast every `Config.SnapshotEvery()` ticks.
+8. Wire clients can negotiate protocol version, capabilities, and packet size through `ClientHello` and `Welcome`.
+9. Authentication messages go to the authentication object.
+10. Regular object requests route to existing objects by `objectType` and `objectId`.
+11. Reliable wire messages are deduplicated, ordered when requested, and tracked for retries when sent.
+12. Tick-aligned client inputs are validated against the configured past/future windows and buffered by client ID and target tick.
+13. Immediate responses and snapshots are serialized as wire or JSON payloads, checked against the lower of `Config.MaxUDPPacketSize` and the negotiated client packet size, and optionally charged against each client's outbound byte budget before `WriteToUDP`.
+14. Snapshots are broadcast every `Config.SnapshotEvery()` ticks.
 
 ## Request Routing
 
@@ -143,6 +146,8 @@ When authentication is required:
 
 Binary UDP packets start with the `ES` magic value and protocol version, then carry sequence, ack, ack bitset, payload length, and one or more framed messages. The runtime owns a `WireMessageRegistry` with built-in protocol and engine messages. Applications can register game messages in the `0x1000-0xffff` range before starting the transport.
 
+`ClientHello` doubles as the built-in wire authentication envelope and optional negotiation message. Older clients can send only client name and token. Newer clients can also request a protocol version, capability bitset, and maximum packet size. `NegotiateClientHello` accepts only the current wire protocol version, intersects requested capabilities with `Config.SupportedWireCapabilities`, and returns the lower packet-size limit in `Welcome`. `Config.Normalized` fills the default capability mask and removes delta-snapshot support whenever `EnableDeltaSnapshots` is false.
+
 Decoded wire messages can take three paths:
 
 - Registered messages with handlers dispatch through `WireMessageRegistry.Dispatch`.
@@ -151,6 +156,8 @@ Decoded wire messages can take three paths:
 - Unknown message IDs decode as `UnknownWireMessage` and are skipped by the UDP transport.
 
 Server snapshot output uses `WorldSnapshot` for full wire snapshots and `WorldDeltaSnapshot` for aggregate delta snapshots. Legacy JSON clients receive the equivalent `SnapshotMessage` and `DeltaSnapshotMessage` envelopes.
+
+The packet sequence and ack fields are transport-level state. They are used for duplicate suppression, ack bitset generation, and reliable retry cleanup. Reliable delivery still wraps individual messages in a `WireMessageReliable` envelope with a reliable ID; a packet ack removes a queued reliable message when that ack covers any packet sequence that carried it.
 
 ## Client Input Buffer Model
 
