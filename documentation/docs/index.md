@@ -9,7 +9,7 @@ hide:
 
 <span class="ev-eyebrow"><span class="dot"></span> Early development build v1.0</span>
 
-# A Go runtime for authoritative multiplayer experiments.
+# A Go runtime for authoritative multiplayer servers.
 
 <p class="ev-sub">Enserva is an early game server runtime written in Go. It combines an authoritative tick loop, UDP transport, server-owned objects, scene-aware snapshots, interest management, and a local debug UI so multiplayer games can keep simulation and replication under server control while the API is still evolving.</p>
 
@@ -43,7 +43,7 @@ hide:
 Enserva is built for authoritative multiplayer servers where the backend owns object lifetime, routing, visibility, scenes, and snapshot delivery. The networking layer is part of the server rather than the whole product: game code plugs into a Go runtime that already knows how to tick, receive client requests, filter snapshots, and expose development state.
 
 !!! warning "Early project notice"
-    Do not use Enserva for real-world production game servers unless you are fully willing and able to absorb large breaking changes.
+Do not use Enserva for real-world production game servers unless you are fully willing and able to absorb large breaking changes.
 
     Enserva is still in a very early stage. You should expect:
 
