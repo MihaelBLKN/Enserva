@@ -36,6 +36,15 @@ These examples are derived from the README, sample objects, and tests in the rep
     await client.SendAsync(Array.Empty<byte>(), 0, "127.0.0.1", 9000);
     ```
 
+=== "Rust"
+
+    ```rust
+    use std::net::UdpSocket;
+
+    let socket = UdpSocket::bind("0.0.0.0:0")?;
+    socket.send_to(&[], "127.0.0.1:9000")?;
+    ```
+
 `netobjects.Register` binds the sample authenticator and factories for `player` and `building`.
 
 ## Create Server-Owned Objects
@@ -70,6 +79,18 @@ Factories are called only by server code:
     server.RegisterAuthenticationObject(new PlayerAuthenticator("default"));
 
     await server.ListenAndServeAsync();
+    ```
+
+=== "Rust"
+
+    ```rust
+    let config = EnservaConfig::default();
+    let mut server = EnservaServer::new(config);
+
+    server.register_factory("building", building_factory)?;
+    let building = server.create_object("building", "building-1")?;
+
+    let _ = building;
     ```
 
 !!! warning
@@ -132,6 +153,33 @@ A client request to a missing `building-1` returns `ErrObjectNotFound`. It does 
     }
     ```
 
+=== "Rust"
+
+    ```rust
+    #[derive(Clone, Debug)]
+    struct Door {
+        id: String,
+        open: bool,
+        uses: u64,
+        client: Option<String>,
+    }
+
+    impl Door {
+        fn object_type(&self) -> &str { "door" }
+        fn object_id(&self) -> &str { &self.id }
+
+        fn on_request(&mut self, ctx: &RequestContext) {
+            match ctx.action.as_str() {
+                "open" => self.open = true,
+                "close" => self.open = false,
+                _ => {}
+            }
+            self.uses += 1;
+            self.client = Some(ctx.client_id.clone());
+        }
+    }
+    ```
+
 Register it:
 
 === "GoLang"
@@ -148,6 +196,19 @@ Register it:
     ```csharp
     var door = new Door { Id = "door-1" };
     server.RegisterObject(door);
+    ```
+
+=== "Rust"
+
+    ```rust
+    let door = Door {
+        id: "door-1".into(),
+        open: false,
+        uses: 0,
+        client: None,
+    };
+
+    server.register_object(door)?;
     ```
 
 Send a request with the preferred wire protocol. For generic object routing, the built-in `ObjectRequest` message keeps the UDP framing binary while adapting into the normal object request path:
@@ -185,6 +246,26 @@ Send a request with the preferred wire protocol. For generic object routing, the
 
     byte[] packet = EnservaWire.EncodePacket(sequence: 10, messages: [message]);
     await udp.SendAsync(packet, packet.Length, "127.0.0.1", 9000);
+    ```
+
+=== "Rust"
+
+    ```rust
+    use enserva_rust_client_example::{DeliveryClass, EnservaUdpClient};
+
+    let mut client = EnservaUdpClient::connect(
+        "127.0.0.1:9000",
+        "rust-client",
+        "dev-token",
+    )?;
+
+    client.send_object_request(
+        "door",
+        "door-1",
+        "open",
+        &[],
+        DeliveryClass::Unreliable,
+    )?;
     ```
 
 For game-specific hot paths, register a typed message in the game range as shown in the [Wire Protocol](api/wire-protocol.md) guide.
@@ -257,6 +338,20 @@ The tests show the intended authentication shape: an object decodes credentials,
     public sealed record AuthPayload(string Token);
     ```
 
+=== "Rust"
+
+    ```rust
+    struct AuthPayload {
+        token: String,
+    }
+
+    fn on_authentication_attempt(ctx: &AuthenticationContext) -> Result<String, AuthError> {
+        let payload: AuthPayload = ctx.decode()?;
+        let account_id = authenticate_token(&payload.token)?;
+        Ok(format!("player-{account_id}"))
+    }
+    ```
+
 Register it:
 
 === "GoLang"
@@ -271,6 +366,14 @@ Register it:
 
     ```csharp
     server.RegisterAuthenticationObject(new Authenticator { Id = "primary" });
+    ```
+
+=== "Rust"
+
+    ```rust
+    server.register_authentication_object(Authenticator {
+        id: "primary".into(),
+    })?;
     ```
 
 ## Test Request Routing Without UDP
@@ -306,6 +409,12 @@ You can test object behavior directly through `Runtime.HandleRequest`:
 
     ```csharp
     var runtime = new EnservaRuntime(new EnservaConfig());
+    ```
+
+=== "Rust"
+
+    ```rust
+    let mut runtime = EnservaRuntime::new(EnservaConfig::default());
     ```
 
 This pattern avoids UDP timing and lets tests assert object state directly.
@@ -345,6 +454,20 @@ Objects can send an immediate response when the transport supplies a `ResponseWr
             Ok = true,
             Data = new Dictionary<string, object> { ["open"] = Open },
         });
+    }
+    ```
+
+=== "Rust"
+
+    ```rust
+    fn on_request(&mut self, ctx: &mut RequestContext) -> Result<(), ResponseError> {
+        self.open = true;
+
+        ctx.respond(ResponseMessage {
+            message_type: "door".into(),
+            sequence: ctx.sequence,
+            ok: true,
+        })
     }
     ```
 

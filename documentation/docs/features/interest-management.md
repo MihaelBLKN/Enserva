@@ -40,6 +40,21 @@ The feature uses object snapshots for position extraction. That means the field 
     }
     ```
 
+=== "Rust"
+
+    ```rust
+    fn on_init(&self, ctx: &mut InitContext) {
+        ctx.runtime.features.enable_interest_management(InterestManagementConfig::player(
+            self.object_type(),
+            self.object_id(),
+            "x",
+            "y",
+            Some("z"),
+            750.0,
+        ));
+    }
+    ```
+
 For non-player objects:
 
 === "GoLang"
@@ -59,6 +74,20 @@ For non-player objects:
     {
         ctx.Runtime.Features.EnableInterestManagement(
             Interest.GameObject(this, "x", "y", "z"));
+    }
+    ```
+
+=== "Rust"
+
+    ```rust
+    fn on_init(&self, ctx: &mut InitContext) {
+        ctx.runtime.features.enable_interest_management(InterestManagementConfig::game_object(
+            self.object_type(),
+            self.object_id(),
+            "x",
+            "y",
+            Some("z"),
+        ));
     }
     ```
 
@@ -94,6 +123,21 @@ For 2D games, use the `2D` helpers and omit the Z field:
     }
     ```
 
+=== "Rust"
+
+    ```rust
+    fn on_init(&self, ctx: &mut InitContext) {
+        ctx.runtime.features.enable_interest_management(InterestManagementConfig::player(
+            self.object_type(),
+            self.object_id(),
+            "x",
+            "y",
+            Some("z"),
+            750.0,
+        ));
+    }
+    ```
+
 Spatial hash lookups use X/Y cells, then exact distance checks use X/Y only for 2D registrations and X/Y/Z for 3D registrations.
 
 ## Field Names
@@ -118,6 +162,17 @@ Position fields can be Go struct field names:
         public double X { get; init; }
         public double Y { get; init; }
         public double Z { get; init; }
+    }
+    ```
+
+=== "Rust"
+
+    ```rust
+    #[derive(Clone, Debug)]
+    struct PlayerSnapshot {
+        x: f64,
+        y: f64,
+        z: f64,
     }
     ```
 
@@ -149,6 +204,17 @@ Or JSON tag names:
     }
     ```
 
+=== "Rust"
+
+    ```rust
+    #[derive(Clone, Debug)]
+    struct PlayerSnapshot {
+        x: f64,
+        y: f64,
+        z: f64,
+    }
+    ```
+
 With the tagged version, use:
 
 === "GoLang"
@@ -161,6 +227,19 @@ With the tagged version, use:
 
     ```csharp
     Interest.Player(player, "x", "y", "z", radius: 750);
+    ```
+
+=== "Rust"
+
+    ```rust
+    InterestManagementConfig::player(
+        player.object_type(),
+        player.object_id(),
+        "x",
+        "y",
+        Some("z"),
+        750.0,
+    );
     ```
 
 Map snapshots with string keys are also supported when their values are numeric or numeric strings.
@@ -215,6 +294,23 @@ If you do not want to use the helper functions, you can pass `InterestManagement
     });
     ```
 
+=== "Rust"
+
+    ```rust
+    let interest = InterestManagementConfig {
+        subject_type: InterestSubject::Player,
+        object_type: player.object_type().into(),
+        object_id: player.object_id().into(),
+        x_field: "x".into(),
+        y_field: "y".into(),
+        z_field: Some("z".into()),
+        radius: Some(750.0),
+        include_self: true,
+    };
+
+    ctx.runtime.features.enable_interest_management(interest);
+    ```
+
 Game objects use `network.InterestGameObject` and usually do not need a radius:
 
 === "GoLang"
@@ -242,6 +338,23 @@ Game objects use `network.InterestGameObject` and usually do not need a radius:
         YField = "y",
         ZField = "z",
     });
+    ```
+
+=== "Rust"
+
+    ```rust
+    let interest = InterestManagementConfig {
+        subject_type: InterestSubject::Player,
+        object_type: player.object_type().into(),
+        object_id: player.object_id().into(),
+        x_field: "x".into(),
+        y_field: "y".into(),
+        z_field: Some("z".into()),
+        radius: Some(750.0),
+        include_self: true,
+    };
+
+    ctx.runtime.features.enable_interest_management(interest);
     ```
 
 ## Spatial Hash Behavior

@@ -29,6 +29,16 @@ Scene state lives on `Runtime.Features()`:
     features.SetObjectScene("building", "tower-b", "arena-b");
     ```
 
+=== "Rust"
+
+    ```rust
+    let features = server.runtime().features();
+    features.set_client_scene("player-1", "arena-a")?;
+    features.set_object_scene("player", "player-1", "arena-a")?;
+    features.set_object_scene("building", "tower-a", "arena-a")?;
+    features.set_object_global("match", "scoreboard")?;
+    ```
+
 When `Runtime.SnapshotForClient("player-1")` runs:
 
 1. The runtime finds the client's current scene.
@@ -65,6 +75,16 @@ Use the feature helpers to assign and inspect scene state:
     features.SetObjectScene("building", "tower-b", "arena-b");
     ```
 
+=== "Rust"
+
+    ```rust
+    let features = server.runtime().features();
+    features.set_client_scene("player-1", "arena-a")?;
+    features.set_object_scene("player", "player-1", "arena-a")?;
+    features.set_object_scene("building", "tower-a", "arena-a")?;
+    features.set_object_global("match", "scoreboard")?;
+    ```
+
 Useful methods:
 
 | Method | Purpose |
@@ -96,6 +116,16 @@ There are two ways for an object to appear in every scene:
     features.SetObjectGlobal("match", "scoreboard");
     ```
 
+=== "Rust"
+
+    ```rust
+    let features = server.runtime().features();
+    features.set_client_scene("player-1", "arena-a")?;
+    features.set_object_scene("player", "player-1", "arena-a")?;
+    features.set_object_scene("building", "tower-a", "arena-a")?;
+    features.set_object_global("match", "scoreboard")?;
+    ```
+
 or leave the object unassigned:
 
 === "GoLang"
@@ -108,6 +138,16 @@ or leave the object unassigned:
 
     ```csharp
     features.ClearObjectScene("system", "clock");
+    ```
+
+=== "Rust"
+
+    ```rust
+    let features = server.runtime().features();
+    features.set_client_scene("player-1", "arena-a")?;
+    features.set_object_scene("player", "player-1", "arena-a")?;
+    features.set_object_scene("building", "tower-a", "arena-a")?;
+    features.set_object_global("match", "scoreboard")?;
     ```
 
 Use `SceneGlobal` when global visibility is intentional and should survive scene bookkeeping. Leave objects unassigned for simple server objects that do not need scene membership yet.
@@ -140,6 +180,18 @@ Scene switches are server-authorized. Standard scene switch requests are routed 
             return SceneSwitchDecision.Denied("locked");
 
         return SceneSwitchDecision.Allowed();
+    }
+    ```
+
+=== "Rust"
+
+    ```rust
+    fn on_scene_switch_request(&self, ctx: &SceneSwitchContext) -> SceneSwitchDecision {
+        if !self.can_enter(&ctx.target_scene) {
+            return SceneSwitchDecision::denied("locked");
+        }
+
+        SceneSwitchDecision::allowed()
     }
     ```
 
@@ -177,6 +229,18 @@ Use `SceneSwitchAllowedTo(sceneID)` to redirect a request:
     }
     ```
 
+=== "Rust"
+
+    ```rust
+    fn on_scene_switch_request(&self, ctx: &SceneSwitchContext) -> SceneSwitchDecision {
+        if ctx.target_scene == "ranked" && !self.ranked_unlocked {
+            return SceneSwitchDecision::allowed_to("lobby");
+        }
+
+        SceneSwitchDecision::allowed()
+    }
+    ```
+
 Use `SceneSwitchDenied(reason)` when the current scene should be preserved.
 
 ## Scenes and Wire Packets
@@ -199,6 +263,15 @@ The standard scene switch payload is:
     public sealed class SceneSwitchRequest
     {
         public string TargetScene { get; set; } = "";
+    }
+    ```
+
+=== "Rust"
+
+    ```rust
+    #[derive(Clone, Debug)]
+    struct SceneSwitchRequest {
+        target_scene: String,
     }
     ```
 

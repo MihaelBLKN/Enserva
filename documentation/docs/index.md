@@ -43,7 +43,7 @@ hide:
 Enserva is built for authoritative multiplayer servers where the backend owns object lifetime, routing, visibility, scenes, and snapshot delivery. The networking layer is part of the server rather than the whole product: game code plugs into a Go runtime that already knows how to tick, receive client requests, filter snapshots, and expose development state.
 
 !!! warning "Early project notice"
-Do not use Enserva for real-world production game servers unless you are fully willing and able to absorb large breaking changes.
+    Do not use Enserva for real-world production game servers unless you are fully willing and able to absorb large breaking changes.
 
     Enserva is still in a very early stage. You should expect:
 

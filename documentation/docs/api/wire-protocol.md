@@ -194,6 +194,32 @@ Register custom messages on the server or runtime before starting the transport:
     });
     ```
 
+=== "Rust"
+
+    ```rust
+    use enserva_rust_client_example::{DeliveryClass, EnservaUdpClient};
+
+    struct CastSpell {
+        player_id: String,
+        spell_id: u16,
+    }
+
+    fn encode_cast_spell(cast: &CastSpell) -> Vec<u8> {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&(cast.player_id.len() as u16).to_be_bytes());
+        payload.extend_from_slice(cast.player_id.as_bytes());
+        payload.extend_from_slice(&cast.spell_id.to_be_bytes());
+        payload
+    }
+
+    let payload = encode_cast_spell(&CastSpell {
+        player_id: "player-1".into(),
+        spell_id: 42,
+    });
+
+    client.send_custom_message(0x1000 + 10, &payload, DeliveryClass::Unreliable)?;
+    ```
+
 The registry owns message encoding, decoding, validation, and optional dispatch. The packet framing layer only sees message IDs and bytes, so new game messages do not require changes to UDP transport or packet parsing code.
 
 To opt a registered message into reliable delivery when it is sent through the UDP response path, set the delivery field:
@@ -202,10 +228,18 @@ To opt a registered message into reliable delivery when it is sent through the U
 Delivery: network.DeliveryReliableOrdered,
 ```
 
+```rust
+delivery: DeliveryClass::ReliableOrdered,
+```
+
 For one-off responses, wrap the response value:
 
 ```go
 return ctx.Respond(network.DeliverReliableUnordered(MyReply{ID: id}))
+```
+
+```rust
+ctx.respond(Delivery::reliable_unordered(MyReply { id }))?;
 ```
 
 Do not mark high-rate snapshots reliable unless your client protocol is designed for the extra queueing and retransmission cost.
@@ -351,6 +385,20 @@ This sends one binary `engine.player_input` message (`0x0101`) inside one wire p
     await udp.SendAsync(packet.ToArray(), packet.Count, "127.0.0.1", 9000);
     ```
 
+=== "Rust"
+
+    ```rust
+    use enserva_rust_client_example::EnservaUdpClient;
+
+    let mut client = EnservaUdpClient::connect(
+        "127.0.0.1:9000",
+        "rust-client",
+        "dev-token",
+    )?;
+
+    client.send_player_input("player-1", 1, 120, 1.0, 0.0, 0.0)?;
+    ```
+
 ### Legacy JSON Request
 
 This sends the same sample input through the supported legacy JSON datagram path.
@@ -396,4 +444,21 @@ This sends the same sample input through the supported legacy JSON datagram path
 
     byte[] payload = Encoding.UTF8.GetBytes(json);
     await udp.SendAsync(payload, payload.Length, "127.0.0.1", 9000);
+    ```
+
+=== "Rust"
+
+    ```rust
+    use std::net::UdpSocket;
+
+    let json = r#"{
+      "seq": 1,
+      "objectType": "player",
+      "objectId": "player-1",
+      "action": "input",
+      "data": { "x": 1, "y": 0, "z": 0 }
+    }"#;
+
+    let socket = UdpSocket::bind("0.0.0.0:0")?;
+    socket.send_to(json.as_bytes(), "127.0.0.1:9000")?;
     ```

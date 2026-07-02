@@ -3,5 +3,6 @@ debug-frontend-udp-threeD/node_modules/
 */node_modules
 */dist
 */package-lock.json
+*/target/
 go.sum
 documentation/site/

@@ -3,7 +3,7 @@
 This page gets the included UDP host running and shows the smallest useful interaction path with Enserva's preferred binary wire protocol: buffer-backed wire packets. Legacy JSON datagrams still work and are shown at the end for compatibility and tooling.
 
 !!! note "Language tabs"
-    GoLang snippets are the canonical server/runtime examples for this repository. C# snippets show equivalent client-side, tooling, or SDK-shaped code for the same protocol concepts.
+    GoLang snippets are the canonical server/runtime examples for this repository. C# and Rust snippets show equivalent client-side, tooling, or SDK-shaped code for the same protocol concepts.
 
 ## 1. Start the Server
 
@@ -152,6 +152,22 @@ When the sample objects are enabled, Enserva registers a `PlayerAuthenticator`. 
     Console.WriteLine($"received {result.Buffer.Length} bytes");
     ```
 
+=== "Rust"
+
+    ```rust
+    use enserva_rust_client_example::{EnservaUdpClient, ServerMessage};
+
+    let mut client = EnservaUdpClient::connect(
+        "127.0.0.1:9000",
+        "quickstart",
+        "",
+    )?;
+
+    if let Some(ServerMessage::Welcome(welcome)) = client.receive_one()? {
+        println!("authenticated as {}", welcome.authenticated_id);
+    }
+    ```
+
 The sample authenticator creates a player object and responds with a binary `Welcome` message. With a fresh example server, the first authenticated client is usually assigned `player-1`.
 
 ## 3. Send Player Input
@@ -252,6 +268,20 @@ After authentication, send the built-in `PlayerInput` wire message from the same
     await udp.SendAsync(packet.ToArray(), packet.Count, "127.0.0.1", 9000);
     ```
 
+=== "Rust"
+
+    ```rust
+    use enserva_rust_client_example::EnservaUdpClient;
+
+    let mut client = EnservaUdpClient::connect(
+        "127.0.0.1:9000",
+        "rust-client",
+        "dev-token",
+    )?;
+
+    client.send_player_input("player-1", 2, 0, 1.0, 0.0, 0.0)?;
+    ```
+
 The player clamps each velocity axis to `[-1, 1]` and moves on each runtime tick according to its configured speed.
 
 ## 4. Receive Wire Snapshots
@@ -300,6 +330,22 @@ Wire clients receive `WorldSnapshot` messages wrapped in binary packets:
         {
             Console.WriteLine($"tick={snapshot.Tick} objects={snapshot.Objects.Count}");
         }
+    }
+    ```
+
+=== "Rust"
+
+    ```rust
+    use enserva_rust_client_example::{EnservaUdpClient, ServerMessage};
+
+    let mut client = EnservaUdpClient::connect(
+        "127.0.0.1:9000",
+        "rust-client",
+        "dev-token",
+    )?;
+
+    if let Some(ServerMessage::WorldSnapshot(snapshot)) = client.receive_one()? {
+        println!("tick={} object_types={}", snapshot.tick, snapshot.objects.len());
     }
     ```
 
@@ -369,4 +415,13 @@ Player input:
     // Keep the authoritative server in Go, then start your C# client/tool separately.
     using var client = new UdpClient();
     await client.SendAsync(Array.Empty<byte>(), 0, "127.0.0.1", 9000);
+    ```
+
+=== "Rust"
+
+    ```rust
+    use std::net::UdpSocket;
+
+    let socket = UdpSocket::bind("0.0.0.0:0")?;
+    socket.send_to(&[], "127.0.0.1:9000")?;
     ```

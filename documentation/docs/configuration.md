@@ -73,6 +73,19 @@ Use `network.DefaultConfig()` for defaults:
     await server.ListenAndServeAsync();
     ```
 
+=== "Rust"
+
+    ```rust
+    use enserva_rust_client_example::EnservaUdpClient;
+
+    let mut client = EnservaUdpClient::connect(
+        "127.0.0.1:9000",
+        "rust-client",
+        "dev-token",
+    )?;
+    client.send_keep_alive()?;
+    ```
+
 ## Normalization Rules
 
 `Config.Normalized()` applies defaults and guards invalid values:
@@ -132,6 +145,18 @@ Example:
 
     TimeSpan tickInterval = config.TickInterval;
     int snapshotEvery = config.SnapshotEvery;
+    ```
+
+=== "Rust"
+
+    ```rust
+    let tick_rate = 120u32;
+    let snapshot_rate = 20u32;
+
+    let tick_interval = std::time::Duration::from_secs_f64(1.0 / tick_rate as f64);
+    let snapshot_every = tick_rate / snapshot_rate;
+
+    assert_eq!(snapshot_every, 6);
     ```
 
 ## Example Host Flags

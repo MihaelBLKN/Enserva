@@ -14,6 +14,12 @@
     using Enserva.Network;
     ```
 
+=== "Rust"
+
+    ```rust
+    use enserva_rust_client_example::{EnservaUdpClient, ServerMessage};
+    ```
+
 ## Configuration
 
 ### `Config`
@@ -73,6 +79,33 @@
     }
     ```
 
+=== "Rust"
+
+    ```rust
+    #[derive(Clone, Debug)]
+    struct EnservaConfig {
+        udp_address: String,
+        tick_rate: u32,
+        snapshot_rate: u32,
+        enable_delta_snapshots: bool,
+        max_clients: u32,
+        max_udp_packet_size: u32,
+    }
+
+    impl Default for EnservaConfig {
+        fn default() -> Self {
+            Self {
+                udp_address: ":9000".into(),
+                tick_rate: 128,
+                snapshot_rate: 20,
+                enable_delta_snapshots: false,
+                max_clients: 0,
+                max_udp_packet_size: 1200,
+            }
+        }
+    }
+    ```
+
 `Config` controls both the runtime and UDP server. Use `DefaultConfig()` when you want the repository defaults, then override fields:
 
 === "GoLang"
@@ -123,6 +156,29 @@
     var server = new EnservaServer(config);
     ```
 
+=== "Rust"
+
+    ```rust
+    #[derive(Clone, Debug)]
+    struct EnservaConfig {
+        udp_address: String,
+        tick_rate: u32,
+        snapshot_rate: u32,
+        enable_delta_snapshots: bool,
+        max_clients: u32,
+        max_udp_packet_size: u32,
+    }
+
+    let config = EnservaConfig {
+        udp_address: ":9100".into(),
+        tick_rate: 60,
+        snapshot_rate: 10,
+        enable_delta_snapshots: true,
+        max_clients: 64,
+        max_udp_packet_size: 1200,
+    };
+    ```
+
 Methods:
 
 | Method                | Returns         | Notes                                                   |
@@ -155,6 +211,24 @@ Methods:
         string ObjectType { get; }
         string ObjectId { get; }
         object Snapshot();
+    }
+    ```
+
+=== "Rust"
+
+    ```rust
+    trait EnservaObject {
+        fn object_type(&self) -> &str;
+        fn object_id(&self) -> &str;
+        fn snapshot(&self) -> SnapshotValue;
+    }
+
+    #[derive(Clone, Debug)]
+    enum SnapshotValue {
+        Null,
+        Bool(bool),
+        Number(f64),
+        String(String),
     }
     ```
 
@@ -194,6 +268,18 @@ Every registered object must provide a type, an ID, and a serializable snapshot.
     }
     ```
 
+=== "Rust"
+
+    ```rust
+    trait ObjectFactory {
+        fn create_object(&self, context: &RequestContext) -> Box<dyn EnservaObject>;
+    }
+
+    struct RequestContext {
+        object_id: String,
+    }
+    ```
+
 Factories are server-side helpers. Registering a factory does not allow a client to create an object by sending a request to a missing object.
 
 ### `ObjectFactoryFunc`
@@ -208,6 +294,12 @@ Factories are server-side helpers. Registering a factory does not allow a client
 
     ```csharp
     public delegate IEnservaObject ObjectFactoryFunc(RequestContext context);
+    ```
+
+=== "Rust"
+
+    ```rust
+    type ObjectFactoryFn = fn(&RequestContext) -> Box<dyn EnservaObject>;
     ```
 
 `ObjectFactoryFunc` adapts a function to `ObjectFactory`:
@@ -229,6 +321,19 @@ Factories are server-side helpers. Registering a factory does not allow a client
     });
     ```
 
+=== "Rust"
+
+    ```rust
+    use enserva_rust_client_example::EnservaUdpClient;
+
+    let mut client = EnservaUdpClient::connect(
+        "127.0.0.1:9000",
+        "rust-client",
+        "dev-token",
+    )?;
+    client.send_keep_alive()?;
+    ```
+
 ## Runtime
 
 ### `NewRuntime`
@@ -243,6 +348,12 @@ Factories are server-side helpers. Registering a factory does not allow a client
 
     ```csharp
     var runtime = new EnservaRuntime(new EnservaConfig());
+    ```
+
+=== "Rust"
+
+    ```rust
+    let mut runtime = EnservaRuntime::new(EnservaConfig::default());
     ```
 
 Creates a runtime with normalized configuration and empty object/factory maps.
@@ -284,6 +395,12 @@ Creates a runtime with normalized configuration and empty object/factory maps.
     runtime.RegisterFactory("building", BuildingFactory.Create);
 
     IEnservaObject building = runtime.CreateObject("building", "building-1");
+    ```
+
+=== "Rust"
+
+    ```rust
+    let mut runtime = EnservaRuntime::new(EnservaConfig::default());
     ```
 
 ### Simulation and Requests
@@ -361,6 +478,19 @@ Creates a runtime with normalized configuration and empty object/factory maps.
     });
     ```
 
+=== "Rust"
+
+    ```rust
+    use enserva_rust_client_example::EnservaUdpClient;
+
+    let mut client = EnservaUdpClient::connect(
+        "127.0.0.1:9000",
+        "rust-client",
+        "dev-token",
+    )?;
+    client.send_keep_alive()?;
+    ```
+
 ## Server
 
 ### `Server`
@@ -401,6 +531,19 @@ When `Config.DebugEnabled` is true, `ListenAndServeUDP` starts the debug HTTP li
     ```csharp
     var udpServer = new EnservaUdpServer(runtime);
     await udpServer.ListenAndServeAsync();
+    ```
+
+=== "Rust"
+
+    ```rust
+    use enserva_rust_client_example::EnservaUdpClient;
+
+    let mut client = EnservaUdpClient::connect(
+        "127.0.0.1:9000",
+        "rust-client",
+        "dev-token",
+    )?;
+    client.send_keep_alive()?;
     ```
 
 `UDPServer` accepts binary wire packets as the primary client protocol and legacy JSON datagrams for compatibility, tracks clients by UDP address, rejects new client addresses when `Config.MaxClients` is greater than zero and already reached, rejects duplicate or older non-zero sequence numbers, suppresses duplicate reliable message IDs, preserves ordered reliable dispatch, advances the runtime in a goroutine, and broadcasts snapshots at the configured rate. Serialized outbound responses and snapshots are dropped before `WriteToUDP` when they exceed `Config.MaxUDPPacketSize`.
@@ -449,6 +592,19 @@ Debug UDP counters include aggregate `bandwidthBudgetDrops`, `bandwidthBudgetDef
     }
     ```
 
+=== "Rust"
+
+    ```rust
+    use enserva_rust_client_example::EnservaUdpClient;
+
+    let mut client = EnservaUdpClient::connect(
+        "127.0.0.1:9000",
+        "rust-client",
+        "dev-token",
+    )?;
+    client.send_keep_alive()?;
+    ```
+
 Used for legacy JSON authentication/object requests and as the compatibility envelope that some built-in wire messages adapt into before reaching object handlers.
 
 ### `SnapshotData`, `SnapshotMessage`, and Deltas`
@@ -463,6 +619,19 @@ Used for legacy JSON authentication/object requests and as the compatibility env
 
     ```csharp
     using SnapshotData = Dictionary<string, Dictionary<string, object>>;
+    ```
+
+=== "Rust"
+
+    ```rust
+    use enserva_rust_client_example::EnservaUdpClient;
+
+    let mut client = EnservaUdpClient::connect(
+        "127.0.0.1:9000",
+        "rust-client",
+        "dev-token",
+    )?;
+    client.send_keep_alive()?;
     ```
 
 Snapshots are grouped by object type and object ID.
@@ -490,6 +659,19 @@ Snapshots are grouped by object type and object ID.
         public ulong LastSequence { get; set; }
         public SnapshotData Objects { get; set; } = new();
     }
+    ```
+
+=== "Rust"
+
+    ```rust
+    use enserva_rust_client_example::EnservaUdpClient;
+
+    let mut client = EnservaUdpClient::connect(
+        "127.0.0.1:9000",
+        "rust-client",
+        "dev-token",
+    )?;
+    client.send_keep_alive()?;
     ```
 
 `SnapshotMessage` is the legacy JSON snapshot envelope. Wire clients receive the equivalent state through `WorldSnapshot`.
@@ -555,6 +737,19 @@ Delta snapshots use the same object grouping for spawned and changed objects:
     }
     ```
 
+=== "Rust"
+
+    ```rust
+    use enserva_rust_client_example::EnservaUdpClient;
+
+    let mut client = EnservaUdpClient::connect(
+        "127.0.0.1:9000",
+        "rust-client",
+        "dev-token",
+    )?;
+    client.send_keep_alive()?;
+    ```
+
 Used by the UDP transport for legacy JSON error responses and available to object handlers through `RequestContext.Respond`. Wire responses are encoded through registered server messages such as `ErrorMessage`.
 
 If a UDP response serializes beyond `Config.MaxUDPPacketSize`, the transport drops it and returns `ErrUDPPacketTooLarge` from the response writer.
@@ -584,6 +779,19 @@ If a UDP response serializes beyond `Config.MaxUDPPacketSize`, the transport dro
         public string ClientId { get; set; } = "";
         public string AuthenticatedId { get; set; } = "";
     }
+    ```
+
+=== "Rust"
+
+    ```rust
+    use enserva_rust_client_example::EnservaUdpClient;
+
+    let mut client = EnservaUdpClient::connect(
+        "127.0.0.1:9000",
+        "rust-client",
+        "dev-token",
+    )?;
+    client.send_keep_alive()?;
     ```
 
 Returned by the UDP server after successful legacy JSON authentication. Wire clients receive `Welcome`.
@@ -677,6 +885,30 @@ The UDP transport accepts binary packets that start with `WireProtocolMagic` and
     }
     ```
 
+=== "Rust"
+
+    ```rust
+    struct CastSpell {
+        player_id: String,
+        spell_id: u16,
+    }
+
+    fn encode_cast_spell(cast: &CastSpell) -> Vec<u8> {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&(cast.player_id.len() as u16).to_be_bytes());
+        payload.extend_from_slice(cast.player_id.as_bytes());
+        payload.extend_from_slice(&cast.spell_id.to_be_bytes());
+        payload
+    }
+
+    let payload = encode_cast_spell(&CastSpell {
+        player_id: "player-1".into(),
+        spell_id: 42,
+    });
+
+    client.send_custom_message(0x1000 + 10, &payload, DeliveryClass::Unreliable)?;
+    ```
+
 | Method or function                                      | Purpose                                                        |
 | ------------------------------------------------------- | -------------------------------------------------------------- |
 | `NewWireMessageRegistry()`                              | Creates an empty registry.                                     |
@@ -735,6 +967,21 @@ Interest management is configured through `Runtime.Features()`:
     }
     ```
 
+=== "Rust"
+
+    ```rust
+    fn on_init(&self, ctx: &mut InitContext) {
+        ctx.runtime.features.enable_interest_management(InterestManagementConfig::player(
+            self.object_type(),
+            self.object_id(),
+            "x",
+            "y",
+            Some("z"),
+            750.0,
+        ));
+    }
+    ```
+
 Helper functions:
 
 | Function                                          | Purpose                                      |
@@ -767,6 +1014,16 @@ Scene management is configured through `Runtime.Features()` and filters snapshot
     features.SetClientScene("player-1", "arena-a");
     features.SetObjectScene("player", "player-1", "arena-a");
     features.SetObjectGlobal("match", "scoreboard");
+    ```
+
+=== "Rust"
+
+    ```rust
+    let features = server.runtime().features();
+    features.set_client_scene("player-1", "arena-a")?;
+    features.set_object_scene("player", "player-1", "arena-a")?;
+    features.set_object_scene("building", "tower-a", "arena-a")?;
+    features.set_object_global("match", "scoreboard")?;
     ```
 
 Scene helpers:
@@ -909,6 +1166,14 @@ Method:
     public interface IResponseWriter
     {
         Task RespondAsync(object message);
+    }
+    ```
+
+=== "Rust"
+
+    ```rust
+    trait ResponseWriter {
+        fn respond(&mut self, message: ResponseMessage) -> Result<(), ResponseError>;
     }
     ```
 

@@ -10,7 +10,7 @@ Enserva exposes one core API package and one example object package:
 The README describes `netObjects` as an example package name. In your own app, create a normal Go package for authoritative objects, such as `netObjects`, `world`, `entities`, or `serverstate`, and implement the interfaces from `network`.
 
 !!! note "Language tabs"
-    GoLang snippets are the canonical server/runtime examples for this repository. C# snippets show equivalent client-side, tooling, or SDK-shaped code for the same protocol concepts.
+    GoLang snippets are the canonical server/runtime examples for this repository. C# and Rust snippets show equivalent client-side, tooling, or SDK-shaped code for the same protocol concepts.
 
 ## Public API Shape
 
@@ -60,6 +60,18 @@ flowchart LR
     server.RegisterAuthenticationObject(new PlayerAuthenticator("default"));
 
     await server.ListenAndServeAsync();
+    ```
+
+=== "Rust"
+
+    ```rust
+    let config = EnservaConfig::default();
+    let mut server = EnservaServer::new(config);
+
+    server.register_factory("player", player_factory)?;
+    server.register_authentication_object(PlayerAuthenticator::new("default"))?;
+
+    server.listen_and_serve()
     ```
 
 ## Object Method Summary

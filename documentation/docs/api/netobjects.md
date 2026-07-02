@@ -32,6 +32,24 @@ Every object registered with Enserva must implement `network.Object`:
     }
     ```
 
+=== "Rust"
+
+    ```rust
+    trait EnservaObject {
+        fn object_type(&self) -> &str;
+        fn object_id(&self) -> &str;
+        fn snapshot(&self) -> SnapshotValue;
+    }
+
+    #[derive(Clone, Debug)]
+    enum SnapshotValue {
+        Null,
+        Bool(bool),
+        Number(f64),
+        String(String),
+    }
+    ```
+
 | Method                | Purpose                                                                                                 |
 | --------------------- | ------------------------------------------------------------------------------------------------------- |
 | `ObjectType() string` | Returns the object category used for routing and snapshot grouping, such as `"player"` or `"building"`. |
@@ -78,6 +96,18 @@ Factories are not object methods. They are server-side creation helpers:
     }
     ```
 
+=== "Rust"
+
+    ```rust
+    trait ObjectFactory {
+        fn create_object(&self, context: &RequestContext) -> Box<dyn EnservaObject>;
+    }
+
+    struct RequestContext {
+        object_id: String,
+    }
+    ```
+
 Most simple factories use `network.ObjectFactoryFunc`:
 
 === "GoLang"
@@ -103,6 +133,18 @@ Most simple factories use `network.ObjectFactoryFunc`:
     server.RegisterFactory("projectile", ProjectileFactory);
     ```
 
+=== "Rust"
+
+    ```rust
+    fn projectile_factory(ctx: &RequestContext) -> Projectile {
+        Projectile {
+            id: ctx.object_id.clone(),
+        }
+    }
+
+    server.register_factory("projectile", projectile_factory)?;
+    ```
+
 Client requests do not call factories. To create an object through a factory, server code must call:
 
 === "GoLang"
@@ -115,6 +157,12 @@ Client requests do not call factories. To create an object through a factory, se
 
     ```csharp
     IEnservaObject projectile = server.CreateObject("projectile", "projectile-1");
+    ```
+
+=== "Rust"
+
+    ```rust
+    let projectile = server.create_object("projectile", "projectile-1")?;
     ```
 
 ## Registration Methods
@@ -195,6 +243,33 @@ Use these `network.Server` or `network.Runtime` methods to make objects availabl
     }
     ```
 
+=== "Rust"
+
+    ```rust
+    #[derive(Clone, Debug)]
+    struct Door {
+        id: String,
+        open: bool,
+        uses: u64,
+        client: Option<String>,
+    }
+
+    impl Door {
+        fn object_type(&self) -> &str { "door" }
+        fn object_id(&self) -> &str { &self.id }
+
+        fn on_request(&mut self, ctx: &RequestContext) {
+            match ctx.action.as_str() {
+                "open" => self.open = true,
+                "close" => self.open = false,
+                _ => {}
+            }
+            self.uses += 1;
+            self.client = Some(ctx.client_id.clone());
+        }
+    }
+    ```
+
 Register it:
 
 === "GoLang"
@@ -211,6 +286,19 @@ Register it:
     ```csharp
     var door = new Door { Id = "door-1" };
     server.RegisterObject(door);
+    ```
+
+=== "Rust"
+
+    ```rust
+    let door = Door {
+        id: "door-1".into(),
+        open: false,
+        uses: 0,
+        client: None,
+    };
+
+    server.register_object(door)?;
     ```
 
 ## Init Hook Example
@@ -237,6 +325,21 @@ Use `OnInit` for setup that needs the runtime after an object is registered. Int
     }
     ```
 
+=== "Rust"
+
+    ```rust
+    fn on_init(&self, ctx: &mut InitContext) {
+        ctx.runtime.features.enable_interest_management(InterestManagementConfig::player(
+            self.object_type(),
+            self.object_id(),
+            "x",
+            "y",
+            Some("z"),
+            750.0,
+        ));
+    }
+    ```
+
 ## Tick Hook Example
 
 === "GoLang"
@@ -255,6 +358,15 @@ Use `OnInit` for setup that needs the runtime after an object is registered. Int
     {
         X += VelocityX * ctx.DeltaSeconds;
         Y += VelocityY * ctx.DeltaSeconds;
+    }
+    ```
+
+=== "Rust"
+
+    ```rust
+    fn on_tick(&mut self, ctx: &TickContext) {
+        self.x += self.velocity_x * ctx.delta_seconds;
+        self.y += self.velocity_y * ctx.delta_seconds;
     }
     ```
 
@@ -297,6 +409,20 @@ Use `OnInit` for setup that needs the runtime after an object is registered. Int
     }
 
     public sealed record ThingRequest(int Value);
+    ```
+
+=== "Rust"
+
+    ```rust
+    struct ThingRequest {
+        value: i32,
+    }
+
+    fn on_request(&mut self, ctx: &RequestContext) -> Result<(), Box<dyn std::error::Error>> {
+        let payload: ThingRequest = ctx.decode()?;
+        let _ = payload.value;
+        Ok(())
+    }
     ```
 
 Useful fields and methods:
@@ -349,6 +475,20 @@ Authentication is handled by one normal object that implements `OnAuthentication
     public sealed record AuthPayload(string Token);
     ```
 
+=== "Rust"
+
+    ```rust
+    struct AuthPayload {
+        token: String,
+    }
+
+    fn on_authentication_attempt(ctx: &AuthenticationContext) -> Result<String, AuthError> {
+        let payload: AuthPayload = ctx.decode()?;
+        let account_id = authenticate_token(&payload.token)?;
+        Ok(format!("player-{account_id}"))
+    }
+    ```
+
 Register it:
 
 === "GoLang"
@@ -363,6 +503,19 @@ Register it:
 
     ```csharp
     server.RegisterAuthenticationObject(new Authenticator { Id = "primary" });
+    ```
+
+=== "Rust"
+
+    ```rust
+    use enserva_rust_client_example::EnservaUdpClient;
+
+    let mut client = EnservaUdpClient::connect(
+        "127.0.0.1:9000",
+        "rust-client",
+        "dev-token",
+    )?;
+    client.send_keep_alive()?;
     ```
 
 Only one authentication object can be registered at a time. If an authentication object exists, unauthenticated UDP clients cannot receive snapshots or send normal object requests.
@@ -383,6 +536,14 @@ Implement `SnapshotVisible` when an object should exist in the runtime but not b
 
     ```csharp
     public bool SnapshotVisible() => false;
+    ```
+
+=== "Rust"
+
+    ```rust
+    fn snapshot_visible(&self) -> bool {
+        false
+    }
     ```
 
 This is useful for authentication handlers and other server-only coordination objects.
